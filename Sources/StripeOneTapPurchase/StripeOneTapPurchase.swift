@@ -5,9 +5,33 @@ import PassKit
 // MARK: - Payment Provider Protocol
 
 public protocol StripeOneTapPaymentProvider: Sendable {
-    /// Called during Apple Pay flow to get the PaymentIntent client secret from your server.
-    /// The productId is provided so you can create the correct PaymentIntent server-side.
-    func fetchPaymentIntentClientSecret(for productId: String) async throws -> String
+
+    /// Configure the payment request before presenting Apple Pay.
+    /// Set payment summary items, recurring payment info, required contact fields, etc.
+    /// Called with a base request that already has merchantIdentifier, country, and currency set.
+    func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String)
+
+    /// Called after the customer authorizes Apple Pay. Create a PaymentIntent or SetupIntent
+    /// on your server and return the client secret.
+    func fetchClientSecret(
+        for productId: String,
+        paymentMethod: StripeAPI.PaymentMethod,
+        paymentInformation: PKPayment
+    ) async throws -> String
+
+    /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
+    /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
+    /// Throwing here will report `.failed(error)` instead of `.purchased`.
+    func didCompletePayment(for productId: String) async throws
+}
+
+// MARK: - Default Implementations
+
+extension StripeOneTapPaymentProvider {
+
+    public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
+
+    public func didCompletePayment(for productId: String) async throws {}
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -42,6 +66,10 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         super.init()
     }
 
+    deinit {
+        purchaseContinuation?.resume(returning: .cancelled)
+    }
+
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
         guard StripeAPI.deviceSupportsApplePay() else {
             return await backupDelegate.makePurchase(productId: productId)
@@ -55,9 +83,13 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
             country: countryCode,
             currency: currencyCode
         )
+
+        // Set a default summary item; the provider can override in configurePaymentRequest
         paymentRequest.paymentSummaryItems = [
             PKPaymentSummaryItem(label: "Total", amount: NSDecimalNumber.zero, type: .pending)
         ]
+
+        paymentProvider.configurePaymentRequest(paymentRequest, for: productId)
 
         guard let applePayContext = STPApplePayContext(paymentRequest: paymentRequest, delegate: self) else {
             return await backupDelegate.makePurchase(productId: productId)
@@ -82,12 +114,19 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         let components = clientSecret.components(separatedBy: "_secret_")
         return components.first
     }
+
+    private func resumePurchase(with status: HeliumPaywallTransactionStatus) {
+        purchaseContinuation?.resume(returning: status)
+        purchaseContinuation = nil
+        currentProductId = nil
+        currentClientSecret = nil
+    }
 }
 
 // MARK: - ApplePayContextDelegate
 
 extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
-    
+
     public func applePayContext(
         _ context: STPApplePayContext,
         didCreatePaymentMethod paymentMethod: StripeAPI.PaymentMethod,
@@ -97,7 +136,11 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
             throw StripeOneTapError.noProductId
         }
 
-        let clientSecret = try await paymentProvider.fetchPaymentIntentClientSecret(for: productId)
+        let clientSecret = try await paymentProvider.fetchClientSecret(
+            for: productId,
+            paymentMethod: paymentMethod,
+            paymentInformation: paymentInformation
+        )
         currentClientSecret = clientSecret
         return clientSecret
     }
@@ -107,32 +150,40 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
         didCompleteWith status: STPApplePayContext.PaymentStatus,
         error: Error?
     ) {
-        let transactionStatus: HeliumPaywallTransactionStatus
-
         switch status {
         case .success:
             if let clientSecret = currentClientSecret,
-               let paymentIntentId = extractPaymentIntentId(from: clientSecret),
+               let intentId = extractPaymentIntentId(from: clientSecret),
                let productId = currentProductId {
                 latestTransactionResult = HeliumTransactionIdResult(
                     productId: productId,
-                    transactionId: paymentIntentId,
-                    originalTransactionId: paymentIntentId
+                    transactionId: intentId,
+                    originalTransactionId: intentId
                 )
             }
-            transactionStatus = .purchased
-        case .userCancellation:
-            transactionStatus = .cancelled
-        case .error:
-            transactionStatus = .failed(error ?? StripeOneTapError.unknownError)
-        @unknown default:
-            transactionStatus = .failed(error ?? StripeOneTapError.unknownError)
-        }
 
-        purchaseContinuation?.resume(returning: transactionStatus)
-        purchaseContinuation = nil
-        currentProductId = nil
-        currentClientSecret = nil
+            let productId = currentProductId
+            let provider = paymentProvider
+            Task { [weak self] in
+                do {
+                    if let productId {
+                        try await provider.didCompletePayment(for: productId)
+                    }
+                    self?.resumePurchase(with: .purchased)
+                } catch {
+                    self?.resumePurchase(with: .failed(error))
+                }
+            }
+
+        case .userCancellation:
+            resumePurchase(with: .cancelled)
+
+        case .error:
+            resumePurchase(with: .failed(error ?? StripeOneTapError.unknownError))
+
+        @unknown default:
+            resumePurchase(with: .failed(error ?? StripeOneTapError.unknownError))
+        }
     }
 }
 
