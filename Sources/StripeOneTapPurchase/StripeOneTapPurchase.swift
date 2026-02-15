@@ -13,7 +13,7 @@ public protocol StripeOneTapPaymentProvider: Sendable {
 
     /// Called after the customer authorizes Apple Pay. Create a PaymentIntent or SetupIntent
     /// on your server and return the client secret.
-    func fetchClientSecret(
+    @MainActor func fetchClientSecret(
         for productId: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
@@ -115,7 +115,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         return components.first
     }
 
-    private func resumePurchase(with status: HeliumPaywallTransactionStatus) {
+    private func resumePurchase(with status: sending HeliumPaywallTransactionStatus) {
         purchaseContinuation?.resume(returning: status)
         purchaseContinuation = nil
         currentProductId = nil
