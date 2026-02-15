@@ -1,0 +1,15 @@
+{
+  "originHash" : "08c94ef89709db95c6e46ef4d40477967c85d7de015077d505687d7c0582e94d",
+  "pins" : [
+    {
+      "identity" : "helium-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cloudcaptainai/helium-swift",
+      "state" : {
+        "revision" : "20c70383f2ab323ce08e12823f7b221f00a3647f",
+        "version" : "4.1.4"
+      }
+    }
+  ],
+  "version" : 3
+}
