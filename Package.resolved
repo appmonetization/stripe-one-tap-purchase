@@ -1,5 +1,5 @@
 {
-  "originHash" : "08c94ef89709db95c6e46ef4d40477967c85d7de015077d505687d7c0582e94d",
+  "originHash" : "9b7a1cc56d1aadbe16193fb7f6681c0b84e95f808e1aaa1e86b21c0ce4edbb2b",
   "pins" : [
     {
       "identity" : "helium-swift",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "20c70383f2ab323ce08e12823f7b221f00a3647f",
         "version" : "4.1.4"
+      }
+    },
+    {
+      "identity" : "stripe-ios-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stripe/stripe-ios-spm",
+      "state" : {
+        "revision" : "a6c3e95198fde712b420a448f591f1a365ffafe0",
+        "version" : "25.6.2"
       }
     }
   ],

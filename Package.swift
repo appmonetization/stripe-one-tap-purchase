@@ -5,25 +5,24 @@ import PackageDescription
 
 let package = Package(
     name: "StripeOneTapPurchase",
+    platforms: [.iOS(.v15)],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
             name: "StripeOneTapPurchase",
             targets: ["StripeOneTapPurchase"]
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/cloudcaptainai/helium-swift", from: "4.1.3")
+        .package(url: "https://github.com/cloudcaptainai/helium-swift", from: "4.1.3"),
+        .package(url: "https://github.com/stripe/stripe-ios-spm", from: "25.6.2"),
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "StripeOneTapPurchase",
             dependencies: [
-                .product(name: "Helium", package: "helium-swift")             
+                .product(name: "Helium", package: "helium-swift"),
+                .product(name: "StripeApplePay", package: "stripe-ios-spm"),
             ]
         ),
-
     ]
 )
