@@ -36,7 +36,7 @@ extension StripeOneTapPaymentProvider {
 
 // MARK: - StripeOneTapPurchaseDelegate
 
-open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, HeliumDelegateReturnsTransaction {
+open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, HeliumDelegateReturnsTransaction, @unchecked Sendable {
 
     public var delegateType: String { "stripe_one_tap" }
 
@@ -78,6 +78,18 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         currentProductId = productId
         currentClientSecret = nil
 
+        if let status = await presentApplePayFlow(for: productId) {
+            return status
+        }
+
+        return await backupDelegate.makePurchase(productId: productId)
+    }
+
+    /// Runs the entire Apple Pay flow on the main actor so that
+    /// STPApplePayContext and PKPaymentRequest never cross isolation boundaries.
+    /// Returns nil if STPApplePayContext could not be created.
+    @MainActor
+    private func presentApplePayFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus? {
         let paymentRequest = StripeAPI.paymentRequest(
             withMerchantIdentifier: merchantIdentifier,
             country: countryCode,
@@ -92,7 +104,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         paymentProvider.configurePaymentRequest(paymentRequest, for: productId)
 
         guard let applePayContext = STPApplePayContext(paymentRequest: paymentRequest, delegate: self) else {
-            return await backupDelegate.makePurchase(productId: productId)
+            return nil
         }
 
         return await withCheckedContinuation { continuation in
