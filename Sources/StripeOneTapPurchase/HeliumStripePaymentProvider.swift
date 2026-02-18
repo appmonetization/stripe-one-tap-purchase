@@ -14,9 +14,11 @@ private enum OfferPaymentMode {
 public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     private let apiKey: String
+    private let managementURL: URL?
 
-    public init(apiKey: String) {
+    public init(apiKey: String, managementURL: URL? = nil) {
         self.apiKey = apiKey
+        self.managementURL = managementURL
     }
 
     // MARK: - configurePaymentRequest
@@ -78,8 +80,8 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         items.append(PKPaymentSummaryItem(label: label, amount: todayAmount, type: .final))
         request.paymentSummaryItems = items
 
-        // PKRecurringPaymentRequest (iOS 16+)
-        if #available(iOS 16.0, *) {
+        // PKRecurringPaymentRequest (iOS 16+) — only if a management URL is provided
+        if #available(iOS 16.0, *), let managementURL {
             let regularBilling = PKRecurringPaymentSummaryItem(label: label, amount: price)
             regularBilling.intervalUnit = calendarUnit(from: subscription.periodUnit)
             regularBilling.intervalCount = subscription.periodValue
@@ -96,7 +98,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             let recurringRequest = PKRecurringPaymentRequest(
                 paymentDescription: label,
                 regularBilling: regularBilling,
-                managementURL: URL(string: "https://tryhelium.com/manage")!
+                managementURL: managementURL
             )
 
             if let offer = introOffer {
