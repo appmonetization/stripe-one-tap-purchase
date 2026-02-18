@@ -1,8 +1,15 @@
 import StripeApplePay
 import PassKit
 import Foundation
+import Helium
 
 private let heliumBaseURL = "https://api-v2.tryhelium.com/"
+
+private enum OfferPaymentMode {
+    static let freeTrial = "FreeTrial"
+    static let payAsYouGo = "PayAsYouGo"
+    static let payUpFront = "PayUpFront"
+}
 
 public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
@@ -15,37 +22,97 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     // MARK: - configurePaymentRequest
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
-        // TODO: Fetch product info from Helium's product catalog and configure:
-        //   - request.paymentSummaryItems (amount, label)
-        //   - request.requiredShippingContactFields (if we need name/email)
-        //   - request.requiredBillingContactFields (if we need address)
-        //   - request.recurringPaymentRequest (for subscriptions)
+        request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
 
-        request.requiredShippingContactFields = [.name]//, .emailAddress]
-//        request.requiredBillingContactFields = [.postalAddress]
+        guard let priceMap = HeliumFetchedConfigManager.shared.getServerProductsPriceMap(),
+              let product = priceMap[productId] else {
+            // No product data available — show a pending total so the sheet can still appear
+            request.paymentSummaryItems = [
+                PKPaymentSummaryItem(label: "Total", amount: NSDecimalNumber.zero, type: .pending)
+            ]
+            return
+        }
 
-        // Free trial: $0 today, then $9.99/month
-        let trialItem = PKPaymentSummaryItem(label: "7-day Free Trial", amount: NSDecimalNumber.zero, type: .final)
-        let recurringItem = PKPaymentSummaryItem(label: "Premium Monthly (after trial)", amount: NSDecimalNumber(string: "9.99"), type: .final)
-        let total = PKPaymentSummaryItem(label: "Helium", amount: NSDecimalNumber.zero, type: .final)
-        request.paymentSummaryItems = [trialItem, recurringItem, total]
+        request.currencyCode = product.currency
 
-        // Recurring payment details shown on the Apple Pay sheet
-        let regularBilling = PKRecurringPaymentSummaryItem(label: "Premium Monthly", amount: NSDecimalNumber(string: "9.99"))
-        regularBilling.intervalUnit = .month
-        regularBilling.startDate = Calendar.current.date(byAdding: .day, value: 7, to: Date())
+        let label = product.localizedTitle ?? productId
+        let price = NSDecimalNumber(decimal: product.value)
 
-        let trialBilling = PKRecurringPaymentSummaryItem(label: "7-day Free Trial", amount: NSDecimalNumber.zero)
+        if let sub = product.subscription {
+            configureSubscription(request, label: label, price: price, product: product, subscription: sub)
+        } else {
+            // One-time purchase
+            request.paymentSummaryItems = [
+                PKPaymentSummaryItem(label: label, amount: price, type: .final),
+                PKPaymentSummaryItem(label: label, amount: price, type: .final)
+            ]
+        }
+    }
 
-        // TODO only allow if ios 16 + ???
+    // MARK: - Subscription Configuration
+
+    private func configureSubscription(
+        _ request: PKPaymentRequest,
+        label: String,
+        price: NSDecimalNumber,
+        product: ServerProductPrice,
+        subscription: SubscriptionInfo
+    ) {
+        let introOffer = subscription.introOfferEligible ? subscription.introOffer : nil
+        var items: [PKPaymentSummaryItem] = []
+        var todayAmount = price
+
+        if let offer = introOffer {
+            let offerPrice = NSDecimalNumber(decimal: offer.price)
+            let offerLabel = formatIntroOfferLabel(offer)
+            let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+
+            items.append(PKPaymentSummaryItem(label: offerLabel, amount: offerPrice, type: .final))
+            items.append(PKPaymentSummaryItem(label: "\(label) (after \(duration))", amount: price, type: .final))
+            todayAmount = offerPrice
+        } else {
+            items.append(PKPaymentSummaryItem(label: label, amount: price, type: .final))
+        }
+
+        // Last item is the total charged today
+        items.append(PKPaymentSummaryItem(label: label, amount: todayAmount, type: .final))
+        request.paymentSummaryItems = items
+
+        // PKRecurringPaymentRequest (iOS 16+)
         if #available(iOS 16.0, *) {
+            let regularBilling = PKRecurringPaymentSummaryItem(label: label, amount: price)
+            regularBilling.intervalUnit = calendarUnit(from: subscription.periodUnit)
+            regularBilling.intervalCount = subscription.periodValue
+
+            if let offer = introOffer {
+                let totalOfferDuration = offer.periodValue * offer.periodCount
+                regularBilling.startDate = Calendar.current.date(
+                    byAdding: calendarComponent(from: offer.periodUnit),
+                    value: totalOfferDuration,
+                    to: Date()
+                )
+            }
+
             let recurringRequest = PKRecurringPaymentRequest(
-                paymentDescription: "Premium Monthly",
+                paymentDescription: label,
                 regularBilling: regularBilling,
                 managementURL: URL(string: "https://tryhelium.com/manage")!
             )
-            recurringRequest.trialBilling = trialBilling
-            recurringRequest.billingAgreement = "You will be charged $9.99/month after your 7-day free trial ends. Cancel anytime."
+
+            if let offer = introOffer {
+                let trialBilling = PKRecurringPaymentSummaryItem(
+                    label: formatIntroOfferLabel(offer),
+                    amount: NSDecimalNumber(decimal: offer.price)
+                )
+                trialBilling.intervalUnit = calendarUnit(from: offer.periodUnit)
+                trialBilling.intervalCount = offer.periodValue
+                recurringRequest.trialBilling = trialBilling
+
+                recurringRequest.billingAgreement = buildBillingAgreement(
+                    product: product, offer: offer
+                )
+            }
+
             request.recurringPaymentRequest = recurringRequest
         }
     }
@@ -184,6 +251,57 @@ private struct SubscriptionResponse: Decodable {
         case subscriptionId = "subscription_id"
         case status
     }
+}
+
+// MARK: - Helpers
+
+private func calendarUnit(from periodUnit: String) -> NSCalendar.Unit {
+    switch periodUnit.lowercased() {
+    case "day": return .day
+    case "week": return .weekOfMonth
+    case "month": return .month
+    case "year": return .year
+    default: return .month
+    }
+}
+
+private func calendarComponent(from periodUnit: String) -> Calendar.Component {
+    switch periodUnit.lowercased() {
+    case "day": return .day
+    case "week": return .weekOfMonth
+    case "month": return .month
+    case "year": return .year
+    default: return .month
+    }
+}
+
+private func formatIntroOfferLabel(_ offer: SubscriptionOffer) -> String {
+    let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+    if offer.paymentMode == OfferPaymentMode.freeTrial {
+        return "\(duration) Free Trial"
+    }
+    return "\(duration) at \(offer.displayPrice)"
+}
+
+private func formatPeriodDescription(unit: String, value: Int) -> String {
+    switch unit.lowercased() {
+    case "day": return value == 1 ? "1-day" : "\(value)-day"
+    case "week": return value == 1 ? "1-week" : "\(value)-week"
+    case "month": return value == 1 ? "1-month" : "\(value)-month"
+    case "year": return value == 1 ? "1-year" : "\(value)-year"
+    default: return "\(value) \(unit)"
+    }
+}
+
+private func buildBillingAgreement(product: ServerProductPrice, offer: SubscriptionOffer) -> String {
+    let regularPrice = product.formattedPrice
+    let period = product.subscription?.periodUnit ?? "month"
+    let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+
+    if offer.paymentMode == OfferPaymentMode.freeTrial {
+        return "You will be charged \(regularPrice)/\(period) after your \(duration) free trial ends. Cancel anytime."
+    }
+    return "You will be charged \(offer.displayPrice)/\(offer.periodUnit) during the introductory period, then \(regularPrice)/\(period). Cancel anytime."
 }
 
 // MARK: - Error
