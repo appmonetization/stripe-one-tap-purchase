@@ -9,7 +9,7 @@ extension Helium {
     /// This is the all-in-one setup for Stripe Apple Pay with Helium.
     public func initializeWithStripeOneTap(
         apiKey: String,
-        backupDelegate: HeliumPaywallDelegate,
+        backupPurchaseDelegate: HeliumPaywallDelegate,
         paymentProvider: StripeOneTapPaymentProvider? = nil,
         merchantIdentifier: String,
         countryCode: String = "US",
@@ -17,7 +17,7 @@ extension Helium {
     ) {
         let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
-            backupDelegate: backupDelegate,
+            backupDelegate: backupPurchaseDelegate,
             paymentProvider: provider,
             merchantIdentifier: merchantIdentifier,
             countryCode: countryCode,
@@ -29,7 +29,7 @@ extension Helium {
     
     func initializeWithApplePayTrait(apiKey: String) {
         Helium.identify.addUserTraits(HeliumUserTraits([
-            "device_supports_stripe_apple_pay": StripeAPI.deviceSupportsApplePay()
+            "hlm_device_supports_stripe_apple_pay": StripeAPI.deviceSupportsApplePay()
         ]))
         // hmm include apple merchant id too??
         // and should these be in custom user traits or at helium traits level?
