@@ -22,7 +22,8 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
     /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    func didCompletePayment(for productId: String) async throws
+    /// - Returns: A transaction identifier (e.g. Stripe subscription ID or payment intent ID), or `nil`.
+    func didCompletePayment(for productId: String) async throws -> String?
 }
 
 // MARK: - Default Implementations
@@ -31,7 +32,7 @@ extension StripeOneTapPaymentProvider {
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
 
-    public func didCompletePayment(for productId: String) async throws {}
+    public func didCompletePayment(for productId: String) async throws -> String? { nil }
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -71,7 +72,12 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
-        guard StripeAPI.deviceSupportsApplePay() else {
+        let allStripeProductIds = Array((HeliumFetchedConfigManager.shared.getServerProductsPriceMap() ?? [:]).keys)
+        if !allStripeProductIds.contains(productId) {
+            return await backupDelegate.makePurchase(productId: productId)
+        }
+        
+        guard StripeAPI.deviceSupportsApplePay() else { //todo investigate if should use this for targeting
             return await backupDelegate.makePurchase(productId: productId)
         }
 
@@ -127,8 +133,12 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         return latestTransactionResult
     }
 
-    private func extractPaymentIntentId(from clientSecret: String) -> String? {
-        // Client secret format: pi_xxx_secret_yyy → pi_xxx
+    private func isPaymentIntentSecret(_ clientSecret: String) -> Bool {
+        clientSecret.hasPrefix("pi_")
+    }
+
+    private func extractIntentId(from clientSecret: String) -> String? {
+        // Client secret format: pi_xxx_secret_yyy → pi_xxx, seti_xxx_secret_yyy → seti_xxx
         let components = clientSecret.components(separatedBy: "_secret_")
         return components.first
     }
@@ -170,22 +180,27 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
     ) {
         switch status {
         case .success:
-            if let clientSecret = currentClientSecret,
-               let intentId = extractPaymentIntentId(from: clientSecret),
-               let productId = currentProductId {
-                latestTransactionResult = HeliumTransactionIdResult(
-                    productId: productId,
-                    transactionId: intentId,
-                    originalTransactionId: intentId
-                )
-            }
-
             let productId = currentProductId
+            let clientSecret = currentClientSecret
             let provider = paymentProvider
             Task { [weak self] in
                 do {
                     if let productId {
-                        try await provider.didCompletePayment(for: productId)
+                        let transactionId: String?
+                        if let clientSecret, self?.isPaymentIntentSecret(clientSecret) == true {
+                            // Payment intent flow: payment already confirmed, skip didCompletePayment
+                            transactionId = self?.extractIntentId(from: clientSecret)
+                        } else {
+                            // Setup intent flow: need to create subscription/charge
+                            transactionId = try await provider.didCompletePayment(for: productId)
+                        }
+                        if let transactionId {
+                            self?.latestTransactionResult = HeliumTransactionIdResult(
+                                productId: productId,
+                                transactionId: transactionId,
+                                originalTransactionId: nil
+                            )
+                        }
                     }
                     self?.resumePurchase(with: .purchased)
                 } catch {

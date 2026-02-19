@@ -197,12 +197,13 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     ///   "status": "active"
     /// }
     /// ```
-    public func didCompletePayment(for productId: String) async throws {
+    public func didCompletePayment(for productId: String) async throws -> String? {
         let body: [String: Any] = [
             "product_id": productId
         ]
 
-        let _: SubscriptionResponse = try await post("stripe/create-subscription", body: body)
+        let response: SubscriptionResponse = try await post("stripe/create-subscription", body: body)
+        return response.subscriptionId ?? response.paymentIntentId
     }
 
     // MARK: - Networking
@@ -246,11 +247,13 @@ private struct SetupIntentResponse: Decodable {
 }
 
 private struct SubscriptionResponse: Decodable {
-    let subscriptionId: String
+    let subscriptionId: String?
+    let paymentIntentId: String?
     let status: String
 
     enum CodingKeys: String, CodingKey {
         case subscriptionId = "subscription_id"
+        case paymentIntentId = "payment_intent_id"
         case status
     }
 }
