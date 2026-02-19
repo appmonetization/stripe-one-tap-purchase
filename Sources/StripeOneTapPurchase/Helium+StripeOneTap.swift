@@ -39,6 +39,10 @@ extension Helium {
             currencyCode: currencyCode
         )
         Helium.config.purchaseDelegate = stripeDelegate
+        
+        let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
+        Helium.entitlements.setThirdPartySource(entitlementsSource)
+        
         initializeWithApplePayTrait(apiKey: apiKey)
     }
     

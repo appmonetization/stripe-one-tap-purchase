@@ -114,7 +114,13 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     open func restorePurchases() async -> Bool {
-        return await backupDelegate.restorePurchases()
+        // Refresh both StoreKit (via backup delegate) and Stripe entitlements in parallel
+        async let stripeRefresh: Void = Helium.entitlements.refreshThirdPartyEntitlements()
+        async let backupRestore: Bool = backupDelegate.restorePurchases()
+        _ = await backupRestore
+        await stripeRefresh
+        // hasAny() checks both StoreKit and third-party source
+        return await Helium.entitlements.hasAny()
     }
 
     open func getLatestCompletedTransactionIdResult() -> HeliumTransactionIdResult? {
