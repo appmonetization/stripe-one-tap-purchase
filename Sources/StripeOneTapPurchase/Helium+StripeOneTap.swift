@@ -31,16 +31,16 @@ extension Helium {
         managementURL: URL? = nil
     ) {
         let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, managementURL: managementURL)
+        let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
             backupDelegate: backupPurchaseDelegate,
             paymentProvider: provider,
             merchantIdentifier: merchantIdentifier,
             countryCode: countryCode,
-            currencyCode: currencyCode
+            currencyCode: currencyCode,
+            entitlementsSource: entitlementsSource
         )
         Helium.config.purchaseDelegate = stripeDelegate
-        
-        let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
         Helium.entitlements.setThirdPartySource(entitlementsSource)
         
         initializeWithApplePayTrait(apiKey: apiKey)

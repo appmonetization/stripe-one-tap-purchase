@@ -46,6 +46,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private let merchantIdentifier: String
     private let countryCode: String
     private let currencyCode: String
+    private let entitlementsSource: ThirdPartyEntitlementsSource?
 
     private var currentProductId: String?
     private var currentClientSecret: String?
@@ -57,13 +58,15 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         paymentProvider: StripeOneTapPaymentProvider,
         merchantIdentifier: String,
         countryCode: String = "US",
-        currencyCode: String = "USD"
+        currencyCode: String = "USD",
+        entitlementsSource: ThirdPartyEntitlementsSource? = nil
     ) {
         self.backupDelegate = backupDelegate
         self.paymentProvider = paymentProvider
         self.merchantIdentifier = merchantIdentifier
         self.countryCode = countryCode
         self.currencyCode = currencyCode
+        self.entitlementsSource = entitlementsSource
         super.init()
     }
 
@@ -121,7 +124,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
     open func restorePurchases() async -> Bool {
         // Refresh both StoreKit (via backup delegate) and Stripe entitlements in parallel
-        async let stripeRefresh: Void = Helium.entitlements.refreshThirdPartyEntitlements()
+        async let stripeRefresh: Void = entitlementsSource?.refreshEntitlements() ?? ()
         async let backupRestore: Bool = backupDelegate.restorePurchases()
         _ = await backupRestore
         await stripeRefresh

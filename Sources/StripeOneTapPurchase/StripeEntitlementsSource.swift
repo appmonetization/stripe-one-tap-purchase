@@ -78,7 +78,7 @@ final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked S
         return lock.withLock { cachedProductIds }
     }
 
-    func hasAnyActiveSubscription(includeNonRenewing: Bool) async -> Bool {
+    func hasAnyActiveSubscription() async -> Bool {
         await refreshIfNeeded()
         return lock.withLock { cachedHasActiveSubscription }
     }
