@@ -42,69 +42,114 @@ struct StripeSubscriptionInfo: Codable, Sendable {
     }
 }
 
-// MARK: - Persisted Data
+// MARK: - Snapshots
+
+/// A product entitlement with its subscription expiration date.
+private struct ProductEntitlement: Codable {
+    let productId: String
+    /// When the subscription period actually ends (from Stripe's currentPeriodEnd/trialEnd).
+    /// Nil for one-time purchases (permanent entitlement).
+    let subscriptionExpiresAt: Date?
+
+    var isActive: Bool {
+        guard let subscriptionExpiresAt else { return true }
+        return Date() < subscriptionExpiresAt
+    }
+}
+
+/// In-memory cache from the latest server fetch.
+private struct CachedSnapshot {
+    let products: [ProductEntitlement]
+    /// TTL — when to re-fetch from the server. Independent of per-product expiration.
+    let refreshAfter: Date
+
+    var needsRefresh: Bool { Date() > refreshAfter }
+
+    var activeProductIds: Set<String> {
+        Set(products.filter { $0.isActive }.map { $0.productId })
+    }
+}
 
 private struct PersistedStripeEntitlements: Codable {
-    let productIds: [String]
-    let hasActiveSubscription: Bool
-    let savedAt: Date
+    let products: [ProductEntitlement]
 }
 
 // MARK: - StripeEntitlementsSource
 
-final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Sendable {
+open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Sendable {
 
     private let apiKey: String
     private let lock = NSLock()
 
-    // In-memory cache
-    private var cachedProductIds: Set<String> = []
-    private var cachedHasActiveSubscription: Bool = false
-    private var lastFetchTime: Date?
-    private let cacheTTL: TimeInterval = 60 * 15 // 15 minutes
+    /// Authoritative once set — populated by a successful server fetch.
+    private var cached: CachedSnapshot?
+    /// Cold-start fallback — loaded from disk, used only until first fetch completes.
+    private var persisted: [ProductEntitlement] = []
+
+    private static let cacheTTL: TimeInterval = 60 * 60 // 60 minutes
 
     private static let heliumBaseURL = "https://api-v2.tryhelium.com/"
     private static let persistenceFileName = "helium_stripe_entitlements.json"
 
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     init(apiKey: String) {
         self.apiKey = apiKey
         loadPersistedData()
+        Task { await fetchFromServer() }
     }
 
     // MARK: - ThirdPartyEntitlementsSource
 
     func entitledProductIds() async -> Set<String> {
         await refreshIfNeeded()
-        return lock.withLock { cachedProductIds }
+        return lock.withLock { currentProductIds }
     }
 
     func hasAnyActiveSubscription() async -> Bool {
         await refreshIfNeeded()
-        return lock.withLock { cachedHasActiveSubscription }
+        return lock.withLock { !currentProductIds.isEmpty }
     }
 
     func refreshEntitlements() async {
         await fetchFromServer()
     }
 
-    func didCompletePurchase(productId: String) async {
-        // Optimistically add to cache
-        lock.withLock {
-            cachedProductIds.insert(productId)
-            cachedHasActiveSubscription = true
+    func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) async {
+        let didUpdate: Bool = lock.withLock {
+            guard var products = cached?.products else { return false }
+            products.append(ProductEntitlement(
+                productId: productId,
+                subscriptionExpiresAt: subscriptionExpiresAt
+            ))
+            cached = CachedSnapshot(
+                products: products,
+                refreshAfter: Date().addingTimeInterval(Self.cacheTTL)
+            )
+            return true
         }
-        persistData()
-
-        // Then verify with server
-        await fetchFromServer()
+        if didUpdate { persistData() }
     }
 
     // MARK: - Private
 
+    /// Best available product IDs: cached (authoritative) > persisted (fallback).
+    /// Both tiers filter by per-product subscription expiration.
+    private var currentProductIds: Set<String> {
+        if let cached {
+            return cached.activeProductIds
+        }
+        return Set(persisted.filter { $0.isActive }.map { $0.productId })
+    }
+
     private func refreshIfNeeded() async {
         let needsRefresh: Bool = lock.withLock {
-            guard let lastFetch = lastFetchTime else { return true }
-            return Date().timeIntervalSince(lastFetch) > cacheTTL
+            guard let cached else { return true }
+            return cached.needsRefresh
         }
         if needsRefresh {
             await fetchFromServer()
@@ -112,9 +157,6 @@ final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked S
     }
 
     private func fetchFromServer() async {
-        //
-        guard let userId = Helium.identify.userId, !userId.isEmpty else { return }
-
         let urlString = Self.heliumBaseURL + "api/stripe/check-entitlement"
         guard let url = URL(string: urlString) else { return }
 
@@ -123,7 +165,13 @@ final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked S
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        let body: [String: String] = ["rc_user_id": userId]
+        let body: [String: String] = [
+            "user_id": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rc_user_id": Helium.identify.revenueCatAppUserId ?? "",
+            "stripe_customer_id": "", // Resolved server-side via user_id/helium_persistent_id
+            "helium_persistent_id": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "app_transaction_id": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
+        ]
         guard let bodyData = try? JSONEncoder().encode(body) else { return }
         request.httpBody = bodyData
 
@@ -136,17 +184,24 @@ final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked S
             let decoder = JSONDecoder()
             let entitlementResponse = try decoder.decode(StripeEntitlementResponse.self, from: data)
 
-            let activeProductIds = Set(
-                entitlementResponse.subscriptions
-                    .filter { $0.isActive }
-                    .map { $0.productId }
-            )
-            let hasActive = entitlementResponse.hasActiveEntitlement
+            let activeSubscriptions = entitlementResponse.subscriptions.filter { $0.isActive }
+
+            // Build per-product entries from subscription expiration dates
+            let productEntitlements: [ProductEntitlement] = activeSubscriptions.compactMap { sub in
+                let dateString = sub.currentPeriodEnd ?? sub.trialEnd
+                guard let dateString,
+                      let expiresAt = Self.iso8601Formatter.date(from: dateString) else {
+                    return nil
+                }
+                return ProductEntitlement(productId: sub.productId, subscriptionExpiresAt: expiresAt)
+            }
 
             lock.withLock {
-                cachedProductIds = activeProductIds
-                cachedHasActiveSubscription = hasActive
-                lastFetchTime = Date()
+                cached = CachedSnapshot(
+                    products: productEntitlements,
+                    refreshAfter: Date().addingTimeInterval(Self.cacheTTL)
+                )
+                persisted = productEntitlements
             }
             persistData()
         } catch {
@@ -169,24 +224,20 @@ final class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked S
               let decoded = try? JSONDecoder().decode(PersistedStripeEntitlements.self, from: data) else {
             return
         }
+        let active = decoded.products.filter { $0.isActive }
         lock.withLock {
-            cachedProductIds = Set(decoded.productIds)
-            cachedHasActiveSubscription = decoded.hasActiveSubscription
+            persisted = active
         }
     }
 
     private func persistData() {
         guard let fileURL = persistenceFileURL else { return }
 
-        let snapshot: PersistedStripeEntitlements = lock.withLock {
-            PersistedStripeEntitlements(
-                productIds: Array(cachedProductIds),
-                hasActiveSubscription: cachedHasActiveSubscription,
-                savedAt: Date()
-            )
+        let encoded: Data? = lock.withLock {
+            let snapshot = PersistedStripeEntitlements(products: persisted)
+            return try? JSONEncoder().encode(snapshot)
         }
-
-        guard let encoded = try? JSONEncoder().encode(snapshot) else { return }
+        guard let encoded else { return }
 
         do {
             let directory = fileURL.deletingLastPathComponent()
