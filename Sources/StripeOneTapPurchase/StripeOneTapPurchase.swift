@@ -39,14 +39,14 @@ extension StripeOneTapPaymentProvider {
 
 open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, HeliumDelegateReturnsTransaction, @unchecked Sendable {
 
-    public var delegateType: String { "stripe_one_tap" }
+    public var delegateType: String { "h_stripe_one_tap" }
 
     private let backupDelegate: HeliumPaywallDelegate
     private let paymentProvider: StripeOneTapPaymentProvider
     private let merchantIdentifier: String
     private let countryCode: String
     private let currencyCode: String
-    private let entitlementsSource: ThirdPartyEntitlementsSource?
+    private let entitlementsSource: StripeEntitlementsSource?
 
     private var currentProductId: String?
     private var currentClientSecret: String?
@@ -59,7 +59,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         merchantIdentifier: String,
         countryCode: String = "US",
         currencyCode: String = "USD",
-        entitlementsSource: ThirdPartyEntitlementsSource? = nil
+        entitlementsSource: StripeEntitlementsSource?
     ) {
         self.backupDelegate = backupDelegate
         self.paymentProvider = paymentProvider

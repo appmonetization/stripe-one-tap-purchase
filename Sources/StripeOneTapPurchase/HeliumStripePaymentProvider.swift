@@ -24,7 +24,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     // MARK: - configurePaymentRequest
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
-        request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
+        request.requiredBillingContactFields = [.name, .emailAddress]
 
         guard let priceMap = HeliumFetchedConfigManager.shared.getServerProductsPriceMap(),
               let product = priceMap[productId] else {

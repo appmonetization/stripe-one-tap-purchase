@@ -105,21 +105,17 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
 
     // MARK: - ThirdPartyEntitlementsSource
 
-    func entitledProductIds() async -> Set<String> {
+    open func entitledProductIds() async -> Set<String> {
         await refreshIfNeeded()
         return lock.withLock { currentProductIds }
     }
 
-    func hasAnyActiveSubscription() async -> Bool {
+    open func hasAnyActiveSubscription() async -> Bool {
         await refreshIfNeeded()
         return lock.withLock { !currentProductIds.isEmpty }
     }
 
-    func refreshEntitlements() async {
-        await fetchFromServer()
-    }
-
-    func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) async {
+    open func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) async {
         let didUpdate: Bool = lock.withLock {
             guard var products = cached?.products else { return false }
             products.append(ProductEntitlement(
@@ -133,6 +129,10 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             return true
         }
         if didUpdate { persistData() }
+    }
+    
+    open func refreshEntitlements() async {
+        await fetchFromServer()
     }
 
     // MARK: - Private
