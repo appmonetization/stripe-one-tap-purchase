@@ -22,8 +22,13 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
     /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    /// - Returns: A transaction identifier (e.g. Stripe subscription ID or payment intent ID), or `nil`.
-    func didCompletePayment(for productId: String) async throws -> String?
+    func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse
+}
+
+public struct PaymentSuccessResponse {
+    let productId: String
+    let expiresAt: Date?
+    let transactionId: String?
 }
 
 // MARK: - Default Implementations
@@ -32,7 +37,7 @@ extension StripeOneTapPaymentProvider {
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
 
-    public func didCompletePayment(for productId: String) async throws -> String? { nil }
+    public func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse? { nil }
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -187,27 +192,30 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
             let clientSecret = currentClientSecret
             let provider = paymentProvider
             Task { [weak self] in
+                guard let self else { return }
                 do {
                     if let productId {
                         let transactionId: String?
-                        if let clientSecret, self?.isPaymentIntentSecret(clientSecret) == true {
+                        if let clientSecret, isPaymentIntentSecret(clientSecret) == true {
                             // Payment intent flow: payment already confirmed, skip didCompletePayment
-                            transactionId = self?.extractIntentId(from: clientSecret)
+                            transactionId = extractIntentId(from: clientSecret)
                         } else {
                             // Setup intent flow: need to create subscription/charge
-                            transactionId = try await provider.didCompletePayment(for: productId)
+                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId)
+                            transactionId = paymentSuccessResponse.transactionId
+                            entitlementsSource?.didCompletePurchase(productId: productId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
                         if let transactionId {
-                            self?.latestTransactionResult = HeliumTransactionIdResult(
+                            latestTransactionResult = HeliumTransactionIdResult(
                                 productId: productId,
                                 transactionId: transactionId,
                                 originalTransactionId: nil
                             )
                         }
                     }
-                    self?.resumePurchase(with: .purchased)
+                    resumePurchase(with: .purchased)
                 } catch {
-                    self?.resumePurchase(with: .failed(error))
+                    resumePurchase(with: .failed(error))
                 }
             }
 

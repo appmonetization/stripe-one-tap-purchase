@@ -114,10 +114,15 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
         await refreshIfNeeded()
         return lock.withLock { !currentProductIds.isEmpty }
     }
-
-    open func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) async {
+    
+    open func refreshEntitlements() async {
+        await fetchFromServer()
+    }
+    
+    open func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) {
         let didUpdate: Bool = lock.withLock {
             guard var products = cached?.products else { return false }
+            products.removeAll { $0.productId == productId }
             products.append(ProductEntitlement(
                 productId: productId,
                 subscriptionExpiresAt: subscriptionExpiresAt
@@ -129,10 +134,6 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             return true
         }
         if didUpdate { persistData() }
-    }
-    
-    open func refreshEntitlements() async {
-        await fetchFromServer()
     }
 
     // MARK: - Private
@@ -168,7 +169,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
         let body: [String: String] = [
             "user_id": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
             "rc_user_id": Helium.identify.revenueCatAppUserId ?? "",
-            "stripe_customer_id": "", // Resolved server-side via user_id/helium_persistent_id
+            "stripe_customer_id": HeliumIdentityManager.shared.getStripeCustomerId(),
             "helium_persistent_id": HeliumIdentityManager.shared.getHeliumPersistentId(),
             "app_transaction_id": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
         ]

@@ -121,35 +121,8 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     // MARK: - fetchClientSecret
 
-    /// POST /stripe/setup-intent
-    ///
     /// Creates a Stripe Customer (or finds existing), attaches the payment method,
     /// and creates a SetupIntent for card authorization.
-    ///
-    /// Request body:
-    /// ```json
-    /// {
-    ///   "product_id": "premium_monthly",
-    ///   "payment_method_id": "pm_xxx",
-    ///   "name": "John Doe",
-    ///   "email": "john@example.com",
-    ///   "billing_address": {
-    ///     "line1": "123 Main St",
-    ///     "city": "San Francisco",
-    ///     "state": "CA",
-    ///     "postal_code": "94105",
-    ///     "country": "US"
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// Response body:
-    /// ```json
-    /// {
-    ///   "client_secret": "seti_xxx_secret_yyy",
-    ///   "customer_id": "cus_xxx"
-    /// }
-    /// ```
     @MainActor
     public func fetchClientSecret(
         for productId: String,
@@ -159,57 +132,63 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let contact = paymentInformation.billingContact
 
         let body: [String: Any] = [
-            "product_id": productId,
-            "payment_method_id": paymentMethod.id ?? "",
-            "name": formatName(from: contact?.name),
-            "email": contact?.emailAddress ?? "",
-            "billing_address": [
-                "line1": contact?.postalAddress?.street ?? "",
-                "city": contact?.postalAddress?.city ?? "",
-                "state": contact?.postalAddress?.state ?? "",
-                "postal_code": contact?.postalAddress?.postalCode ?? "",
-                "country": contact?.postalAddress?.isoCountryCode ?? ""
+            "product_price_id": productId,
+            "user_id": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rc_user_id": Helium.identify.revenueCatAppUserId ?? "",
+            "stripe_customer_id": HeliumIdentityManager.shared.getStripeCustomerId(),
+            "helium_persistent_id": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "app_transaction_id": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+            "customer_info": [
+                "payment_method_id": paymentMethod.id,
+                "name": formatName(from: contact?.name),
+                "email": contact?.emailAddress ?? "",
+                "billing_address": [
+                    "line1": contact?.postalAddress?.street ?? "",
+                    "city": contact?.postalAddress?.city ?? "",
+                    "state": contact?.postalAddress?.state ?? "",
+                    "postal_code": contact?.postalAddress?.postalCode ?? "",
+                    "country": contact?.postalAddress?.isoCountryCode ?? ""
+                ]
             ]
         ]
 
-        let response: SetupIntentResponse = try await post("stripe/setup-intent", body: body)
-        return response.clientSecret
+        let response: SetupIntentResponse = try await post("api/stripe/create-intent", body: body)
+        guard let clientSecret = response.clientSecret else {
+            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "No client secret returned from the server.")
+        }
+        if let stripeCustomerId = response.stripeCustomerId {
+            HeliumIdentityManager.shared.setStripeCustomerId(stripeCustomerId)
+        }
+        return clientSecret
     }
 
     // MARK: - didCompletePayment
 
-    /// POST /stripe/create-subscription
-    ///
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
-    ///
-    /// Request body:
-    /// ```json
-    /// {
-    ///   "product_id": "premium_monthly"
-    /// }
-    /// ```
-    ///
-    /// Response body:
-    /// ```json
-    /// {
-    ///   "subscription_id": "sub_xxx",
-    ///   "status": "active"
-    /// }
-    /// ```
-    public func didCompletePayment(for productId: String) async throws -> String? {
+    public func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse? {
         let body: [String: Any] = [
             "product_id": productId
         ]
 
-        let response: SubscriptionResponse = try await post("stripe/create-subscription", body: body)
-        return response.subscriptionId ?? response.paymentIntentId
+        let response: ExecutePurchaseResponse = try await post("api/stripe/execute-purchase", body: body)
+        
+        if let productId = response.subscriptionId {
+            
+        }
+        return PaymentSuccessResponse(
+            productId: productId,
+            expiresAt: parseISODate(response.expiresAt),
+            transactionId: response.subscriptionId ?? response.paymentIntentId
+        )
     }
 
     // MARK: - Networking
 
     private func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
-        let url = URL(string: heliumBaseURL + path)!
+        guard let url = URL(string: heliumBaseURL + path) else {
+            throw HeliumStripeAPIError.invalidEndpoint(path: path)
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -237,25 +216,16 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 // MARK: - Response Types
 
 private struct SetupIntentResponse: Decodable {
-    let clientSecret: String
-    let customerId: String
-
-    enum CodingKeys: String, CodingKey {
-        case clientSecret = "client_secret"
-        case customerId = "customer_id"
-    }
+    let clientSecret: String?
+    let setupIntentId: String?
+    let stripeCustomerId: String?
 }
 
-private struct SubscriptionResponse: Decodable {
+private struct ExecutePurchaseResponse: Decodable {
     let subscriptionId: String?
     let paymentIntentId: String?
-    let status: String
-
-    enum CodingKeys: String, CodingKey {
-        case subscriptionId = "subscription_id"
-        case paymentIntentId = "payment_intent_id"
-        case status
-    }
+    let status: String?
+    let expiresAt: String?
 }
 
 // MARK: - Helpers
@@ -313,11 +283,26 @@ private func buildBillingAgreement(product: ServerProductPrice, offer: Subscript
 
 enum HeliumStripeAPIError: LocalizedError {
     case serverError(statusCode: Int, message: String)
+    case invalidEndpoint(path: String)
 
     var errorDescription: String? {
         switch self {
         case .serverError(let statusCode, let message):
             return "Helium Stripe API error (\(statusCode)): \(message)"
+        case .invalidEndpoint(let path):
+            return "Invalid endpoint \(path)"
         }
     }
+}
+
+private func parseISODate(_ dateString: String?) -> Date? {
+    guard let dateString = dateString else { return nil }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    // Try without fractional seconds first, then with
+    if let date = formatter.date(from: dateString) {
+        return date
+    }
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.date(from: dateString)
 }
