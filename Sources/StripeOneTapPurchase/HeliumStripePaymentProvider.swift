@@ -132,27 +132,28 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let contact = paymentInformation.billingContact
 
         let body: [String: Any] = [
-            "product_price_id": productId,
-            "user_id": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "rc_user_id": Helium.identify.revenueCatAppUserId ?? "",
-            "stripe_customer_id": HeliumIdentityManager.shared.getStripeCustomerId(),
-            "helium_persistent_id": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "app_transaction_id": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
-            "customer_info": [
-                "payment_method_id": paymentMethod.id,
+            "apiKey": apiKey,
+            "productPriceId": productId,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+            "customerInfo": [
+                "paymentMethodId": paymentMethod.id,
                 "name": formatName(from: contact?.name),
                 "email": contact?.emailAddress ?? "",
-                "billing_address": [
+                "billingAddress": [
                     "line1": contact?.postalAddress?.street ?? "",
                     "city": contact?.postalAddress?.city ?? "",
                     "state": contact?.postalAddress?.state ?? "",
-                    "postal_code": contact?.postalAddress?.postalCode ?? "",
+                    "postalCode": contact?.postalAddress?.postalCode ?? "",
                     "country": contact?.postalAddress?.isoCountryCode ?? ""
                 ]
             ]
         ]
 
-        let response: SetupIntentResponse = try await post("api/stripe/create-intent", body: body)
+        let response: SetupIntentResponse = try await post("stripe/create-intent", body: body)
         guard let clientSecret = response.clientSecret else {
             throw HeliumStripeAPIError.serverError(statusCode: 200, message: "No client secret returned from the server.")
         }
@@ -166,16 +167,19 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
-    public func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse? {
+    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse? {
         let body: [String: Any] = [
-            "product_id": productId
+            "apiKey": apiKey,
+            "productPriceId": productId,
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "paymentMethodId": paymentMethodId,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
+            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
         ]
 
-        let response: ExecutePurchaseResponse = try await post("api/stripe/execute-purchase", body: body)
-        
-        if let productId = response.subscriptionId {
-            
-        }
+        let response: ExecutePurchaseResponse = try await post("stripe/execute-purchase", body: body)
         return PaymentSuccessResponse(
             productId: productId,
             expiresAt: parseISODate(response.expiresAt),
@@ -192,7 +196,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -203,7 +207,8 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             throw HeliumStripeAPIError.serverError(statusCode: http?.statusCode ?? 0, message: message)
         }
 
-        return try JSONDecoder().decode(T.self, from: data)
+        let decoder = JSONDecoder()
+        return try decoder.decode(T.self, from: data)
     }
 
     private func formatName(from nameComponents: PersonNameComponents?) -> String {
@@ -295,7 +300,7 @@ enum HeliumStripeAPIError: LocalizedError {
     }
 }
 
-private func parseISODate(_ dateString: String?) -> Date? {
+func parseISODate(_ dateString: String?) -> Date? {
     guard let dateString = dateString else { return nil }
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]

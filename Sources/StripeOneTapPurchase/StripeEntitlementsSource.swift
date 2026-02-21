@@ -12,12 +12,6 @@ struct StripeEntitlementResponse: Codable, Sendable {
     let hasActiveEntitlement: Bool
     let subscriptions: [StripeSubscriptionInfo]
     let customerId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case hasActiveEntitlement = "has_active_entitlement"
-        case subscriptions
-        case customerId = "customer_id"
-    }
 }
 
 struct StripeSubscriptionInfo: Codable, Sendable {
@@ -27,15 +21,6 @@ struct StripeSubscriptionInfo: Codable, Sendable {
     let currentPeriodEnd: String?
     let cancelAtPeriodEnd: Bool?
     let trialEnd: String?
-
-    enum CodingKeys: String, CodingKey {
-        case subscriptionId = "subscription_id"
-        case productId = "product_id"
-        case status
-        case currentPeriodEnd = "current_period_end"
-        case cancelAtPeriodEnd = "cancel_at_period_end"
-        case trialEnd = "trial_end"
-    }
 
     var isActive: Bool {
         ["active", "trialing"].contains(status)
@@ -90,12 +75,6 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
 
     private static let heliumBaseURL = "https://api-v2.tryhelium.com/"
     private static let persistenceFileName = "helium_stripe_entitlements.json"
-
-    private static let iso8601Formatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
 
     init(apiKey: String) {
         self.apiKey = apiKey
@@ -158,20 +137,21 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     }
 
     private func fetchFromServer() async {
-        let urlString = Self.heliumBaseURL + "api/stripe/check-entitlement"
+        let urlString = Self.heliumBaseURL + "stripe/check-entitlement"
         guard let url = URL(string: urlString) else { return }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
 
         let body: [String: String] = [
-            "user_id": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "rc_user_id": Helium.identify.revenueCatAppUserId ?? "",
-            "stripe_customer_id": HeliumIdentityManager.shared.getStripeCustomerId(),
-            "helium_persistent_id": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "app_transaction_id": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
+            "apiKey": apiKey,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
         ]
         guard let bodyData = try? JSONEncoder().encode(body) else { return }
         request.httpBody = bodyData
@@ -190,8 +170,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             // Build per-product entries from subscription expiration dates
             let productEntitlements: [ProductEntitlement] = activeSubscriptions.compactMap { sub in
                 let dateString = sub.currentPeriodEnd ?? sub.trialEnd
-                guard let dateString,
-                      let expiresAt = Self.iso8601Formatter.date(from: dateString) else {
+                guard let expiresAt = parseISODate(dateString) else {
                     return nil
                 }
                 return ProductEntitlement(productId: sub.productId, subscriptionExpiresAt: expiresAt)

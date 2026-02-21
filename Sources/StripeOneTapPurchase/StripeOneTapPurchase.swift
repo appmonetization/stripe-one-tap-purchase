@@ -22,7 +22,7 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
     /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse
+    func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse
 }
 
 public struct PaymentSuccessResponse {
@@ -37,7 +37,7 @@ extension StripeOneTapPaymentProvider {
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
 
-    public func didCompletePayment(for productId: String) async throws -> PaymentSuccessResponse? { nil }
+    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse? { nil }
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -55,6 +55,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
     private var currentProductId: String?
     private var currentClientSecret: String?
+    private var currentPaymentMethodId: String?
     private var purchaseContinuation: CheckedContinuation<HeliumPaywallTransactionStatus, Never>?
     private var latestTransactionResult: HeliumTransactionIdResult?
 
@@ -156,6 +157,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         purchaseContinuation = nil
         currentProductId = nil
         currentClientSecret = nil
+        currentPaymentMethodId = nil
     }
 }
 
@@ -171,6 +173,8 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
         guard let productId = currentProductId else {
             throw StripeOneTapError.noProductId
         }
+
+        currentPaymentMethodId = paymentMethod.id
 
         let clientSecret = try await paymentProvider.fetchClientSecret(
             for: productId,
@@ -190,6 +194,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
         case .success:
             let productId = currentProductId
             let clientSecret = currentClientSecret
+            let paymentMethodId = currentPaymentMethodId
             let provider = paymentProvider
             Task { [weak self] in
                 guard let self else { return }
@@ -201,7 +206,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             transactionId = extractIntentId(from: clientSecret)
                         } else {
                             // Setup intent flow: need to create subscription/charge
-                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId)
+                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethodId: paymentMethodId ?? "")
                             transactionId = paymentSuccessResponse.transactionId
                             entitlementsSource?.didCompletePurchase(productId: productId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
