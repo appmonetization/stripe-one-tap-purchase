@@ -35,13 +35,16 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             return
         }
 
-        request.currencyCode = product.currency
+        if let productCurrency = product.currency {
+            request.currencyCode = productCurrency
+        }
 
         let label = product.localizedTitle ?? productId
-        let price = NSDecimalNumber(decimal: product.value)
+        let price = NSDecimalNumber(decimal: product.value ?? 0)
 
-        if let sub = product.subscription {
-            configureSubscription(request, label: label, price: price, product: product, subscription: sub)
+        let localizedPrice = product.toLocalizedPrice()
+        if let subInfo = localizedPrice.subscriptionInfo {
+            configureSubscription(request, label: label, price: price, product: product, subscription: subInfo)
         } else {
             // One-time purchase
             request.paymentSummaryItems = [
@@ -139,11 +142,11 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
             "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
             "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
-            "customerInfo": [
-                "paymentMethodId": paymentMethod.id,
+            "customer_info": [
+                "payment_method_id": paymentMethod.id,
                 "name": formatName(from: contact?.name),
                 "email": contact?.emailAddress ?? "",
-                "billingAddress": [
+                "billing_address": [
                     "line1": contact?.postalAddress?.street ?? "",
                     "city": contact?.postalAddress?.city ?? "",
                     "state": contact?.postalAddress?.state ?? "",
@@ -167,12 +170,12 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
-    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse? {
+    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
         let body: [String: Any] = [
             "apiKey": apiKey,
             "productPriceId": productId,
             "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
-            "paymentMethodId": paymentMethodId,
+            "payment_method_id": paymentMethodId,
             "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
             "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
             "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
@@ -208,6 +211,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         }
 
         let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(T.self, from: data)
     }
 
@@ -274,7 +278,7 @@ private func formatPeriodDescription(unit: String, value: Int) -> String {
 }
 
 private func buildBillingAgreement(product: ServerProductPrice, offer: SubscriptionOffer) -> String {
-    let regularPrice = product.formattedPrice
+    let regularPrice = product.formattedPrice ?? ""
     let period = product.subscription?.periodUnit ?? "month"
     let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
 

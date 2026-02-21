@@ -1,6 +1,6 @@
 import Foundation
 import Helium
-import StripeApplePay
+@preconcurrency import StripeApplePay
 
 extension Helium {
     
@@ -11,6 +11,7 @@ extension Helium {
     ///
     /// - Parameters:
     ///   - apiKey: Your Helium API key.
+    ///   - stripePublishableKey: Your Stripe publishable key (e.g. `"pk_live_..."` or `"pk_test_..."`).
     ///   - backupPurchaseDelegate: Backup delegate used when the device does not support Apple Pay.
     ///   - paymentProvider: Custom payment provider. When `nil`, a default ``HeliumStripePaymentProvider``
     ///     is created using `apiKey` and `managementURL`.
@@ -23,6 +24,7 @@ extension Helium {
     ///     disclosure is omitted. Only used when `paymentProvider` is `nil`.
     public func initializeWithStripeOneTap(
         apiKey: String,
+        stripePublishableKey: String,
         backupPurchaseDelegate: HeliumPaywallDelegate,
         paymentProvider: StripeOneTapPaymentProvider? = nil,
         merchantIdentifier: String,
@@ -30,6 +32,8 @@ extension Helium {
         currencyCode: String = "USD",
         managementURL: URL? = nil
     ) {
+        StripeAPI.defaultPublishableKey = stripePublishableKey
+        
         let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, managementURL: managementURL)
         let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
@@ -41,7 +45,7 @@ extension Helium {
             entitlementsSource: entitlementsSource
         )
         Helium.config.purchaseDelegate = stripeDelegate
-        Helium.entitlements.setThirdPartySource(entitlementsSource)
+        Helium.config.thirdPartyEntitlementsSource = entitlementsSource
         
         initializeWithApplePayTrait(apiKey: apiKey)
     }

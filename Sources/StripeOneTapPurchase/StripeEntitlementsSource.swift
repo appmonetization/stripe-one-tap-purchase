@@ -163,6 +163,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             }
 
             let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
             let entitlementResponse = try decoder.decode(StripeEntitlementResponse.self, from: data)
 
             let activeSubscriptions = entitlementResponse.subscriptions.filter { $0.isActive }
