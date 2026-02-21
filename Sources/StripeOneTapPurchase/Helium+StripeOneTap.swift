@@ -13,28 +13,31 @@ extension Helium {
     ///   - apiKey: Your Helium API key.
     ///   - stripePublishableKey: Your Stripe publishable key (e.g. `"pk_live_..."` or `"pk_test_..."`).
     ///   - backupPurchaseDelegate: Backup delegate used when the device does not support Apple Pay.
+    ///   - merchantIdentifier: Your Apple Pay merchant identifier (e.g. `"merchant.com.example"`).
+    ///   - merchantName: Your company or app name, displayed as the "PAY TO" label on the Apple Pay sheet.
+    ///     Only used when `paymentProvider` is `nil`.
+    ///   - managementURL: URL where users can manage their subscription
+    ///     (e.g. a Stripe Customer Portal link). The Apple Pay sheet shows
+    ///     a recurring payment disclosure with a link to this URL.
+    ///     Only used when `paymentProvider` is `nil`.
     ///   - paymentProvider: Custom payment provider. When `nil`, a default ``HeliumStripePaymentProvider``
     ///     is created using `apiKey` and `managementURL`.
-    ///   - merchantIdentifier: Your Apple Pay merchant identifier (e.g. `"merchant.com.example"`).
     ///   - countryCode: Two-letter ISO country code for the merchant. Defaults to `"US"`.
-    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.
-    ///   - managementURL: Optional URL where users can manage their subscription
-    ///     (e.g. a Stripe Customer Portal link). When provided, the Apple Pay sheet shows
-    ///     a recurring payment disclosure with a link to this URL. When `nil`, the
-    ///     disclosure is omitted. Only used when `paymentProvider` is `nil`.
+    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.   
     public func initializeWithStripeOneTap(
         apiKey: String,
         stripePublishableKey: String,
         backupPurchaseDelegate: HeliumPaywallDelegate,
-        paymentProvider: StripeOneTapPaymentProvider? = nil,
         merchantIdentifier: String,
+        merchantName: String,
+        managementURL: URL,
+        paymentProvider: StripeOneTapPaymentProvider? = nil,
         countryCode: String = "US",
-        currencyCode: String = "USD",
-        managementURL: URL? = nil
+        currencyCode: String = "USD"
     ) {
         StripeAPI.defaultPublishableKey = stripePublishableKey
         
-        let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, managementURL: managementURL)
+        let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, merchantName: merchantName, managementURL: managementURL)
         let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
             backupDelegate: backupPurchaseDelegate,

@@ -14,10 +14,12 @@ private enum OfferPaymentMode {
 public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     private let apiKey: String
-    private let managementURL: URL?
+    private let merchantName: String
+    private let managementURL: URL
 
-    public init(apiKey: String, managementURL: URL? = nil) {
+    public init(apiKey: String, merchantName: String, managementURL: URL) {
         self.apiKey = apiKey
+        self.merchantName = merchantName
         self.managementURL = managementURL
     }
 
@@ -49,7 +51,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             // One-time purchase
             request.paymentSummaryItems = [
                 PKPaymentSummaryItem(label: label, amount: price, type: .final),
-                PKPaymentSummaryItem(label: label, amount: price, type: .final)
+                PKPaymentSummaryItem(label: merchantName, amount: price, type: .final)
             ]
         }
     }
@@ -67,35 +69,42 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         var items: [PKPaymentSummaryItem] = []
         var todayAmount = price
 
+        // Compute the date regular billing starts (end of intro offer)
+        let regularStartDate: Date? = introOffer.flatMap { offer in
+            let totalOfferDuration = offer.periodValue * offer.periodCount
+            return Calendar.current.date(
+                byAdding: calendarComponent(from: offer.periodUnit),
+                value: totalOfferDuration,
+                to: Date()
+            )
+        }
+
         if let offer = introOffer {
             let offerPrice = NSDecimalNumber(decimal: offer.price)
             let offerLabel = formatIntroOfferLabel(offer)
-            let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+            let formattedPrice = product.formattedPrice ?? price.stringValue
+            let startDateLabel = regularStartDate.map { formatShortDate($0) } ?? ""
+            let regularLabel = "\(formattedPrice)/\(subscription.periodUnit) starting \(startDateLabel)"
 
             items.append(PKPaymentSummaryItem(label: offerLabel, amount: offerPrice, type: .final))
-            items.append(PKPaymentSummaryItem(label: "\(label) (after \(duration))", amount: price, type: .final))
+            items.append(PKPaymentSummaryItem(label: regularLabel, amount: price, type: .final))
             todayAmount = offerPrice
         } else {
-            items.append(PKPaymentSummaryItem(label: label, amount: price, type: .final))
+            items.append(PKPaymentSummaryItem(label: "\(label) (per \(subscription.periodUnit))", amount: price, type: .final))
         }
 
-        // Last item is the total charged today
-        items.append(PKPaymentSummaryItem(label: label, amount: todayAmount, type: .final))
+        // Last item is the total charged today — label is shown as "PAY TO" on the sheet
+        items.append(PKPaymentSummaryItem(label: merchantName, amount: todayAmount, type: .final))
         request.paymentSummaryItems = items
 
-        // PKRecurringPaymentRequest (iOS 16+) — only if a management URL is provided
-        if #available(iOS 16.0, *), let managementURL {
+        // PKRecurringPaymentRequest (iOS 16+)
+        if #available(iOS 16.0, *) {
             let regularBilling = PKRecurringPaymentSummaryItem(label: label, amount: price)
             regularBilling.intervalUnit = calendarUnit(from: subscription.periodUnit)
             regularBilling.intervalCount = subscription.periodValue
 
-            if let offer = introOffer {
-                let totalOfferDuration = offer.periodValue * offer.periodCount
-                regularBilling.startDate = Calendar.current.date(
-                    byAdding: calendarComponent(from: offer.periodUnit),
-                    value: totalOfferDuration,
-                    to: Date()
-                )
+            if introOffer != nil {
+                regularBilling.startDate = regularStartDate
             }
 
             let recurringRequest = PKRecurringPaymentRequest(
@@ -134,25 +143,17 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     ) async throws -> String {
         let contact = paymentInformation.billingContact
 
-        let body: [String: Any] = [
-            "apiKey": apiKey,
-            "productPriceId": productId,
-            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
-            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
-            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
-            "customer_info": [
-                "payment_method_id": paymentMethod.id,
-                "name": formatName(from: contact?.name),
-                "email": contact?.emailAddress ?? "",
-                "billing_address": [
-                    "line1": contact?.postalAddress?.street ?? "",
-                    "city": contact?.postalAddress?.city ?? "",
-                    "state": contact?.postalAddress?.state ?? "",
-                    "postalCode": contact?.postalAddress?.postalCode ?? "",
-                    "country": contact?.postalAddress?.isoCountryCode ?? ""
-                ]
+        var body = baseRequestBody(productId: productId)
+        body["customer_info"] = [
+            "payment_method_id": paymentMethod.id,
+            "name": formatName(from: contact?.name),
+            "email": contact?.emailAddress ?? "",
+            "billing_address": [
+                "line1": contact?.postalAddress?.street ?? "",
+                "city": contact?.postalAddress?.city ?? "",
+                "state": contact?.postalAddress?.state ?? "",
+                "postalCode": contact?.postalAddress?.postalCode ?? "",
+                "country": contact?.postalAddress?.isoCountryCode ?? ""
             ]
         ]
 
@@ -171,16 +172,8 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
     public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
-        let body: [String: Any] = [
-            "apiKey": apiKey,
-            "productPriceId": productId,
-            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
-            "payment_method_id": paymentMethodId,
-            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
-            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
-        ]
+        var body = baseRequestBody(productId: productId)
+        body["payment_method_id"] = paymentMethodId
 
         let response: ExecutePurchaseResponse = try await post("stripe/execute-purchase", body: body)
         return PaymentSuccessResponse(
@@ -213,6 +206,18 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(T.self, from: data)
+    }
+
+    private func baseRequestBody(productId: String) -> [String: Any] {
+        [
+            "apiKey": apiKey,
+            "productPriceId": productId,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+        ]
     }
 
     private func formatName(from nameComponents: PersonNameComponents?) -> String {
@@ -267,6 +272,7 @@ private func formatIntroOfferLabel(_ offer: SubscriptionOffer) -> String {
     return "\(duration) at \(offer.displayPrice)"
 }
 
+/// Hyphenated form for use as an adjective (e.g., "3-month Free Trial")
 private func formatPeriodDescription(unit: String, value: Int) -> String {
     switch unit.lowercased() {
     case "day": return value == 1 ? "1-day" : "\(value)-day"
@@ -275,6 +281,13 @@ private func formatPeriodDescription(unit: String, value: Int) -> String {
     case "year": return value == 1 ? "1-year" : "\(value)-year"
     default: return "\(value) \(unit)"
     }
+}
+
+/// Formats a date as "Feb 28" style for display in payment labels
+private func formatShortDate(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "MMM d"
+    return formatter.string(from: date)
 }
 
 private func buildBillingAgreement(product: ServerProductPrice, offer: SubscriptionOffer) -> String {
