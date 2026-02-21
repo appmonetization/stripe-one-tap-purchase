@@ -26,7 +26,8 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     // MARK: - configurePaymentRequest
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
-        request.requiredBillingContactFields = [.name, .emailAddress]
+        request.requiredShippingContactFields = [.name, .emailAddress]
+        request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
 
         guard let priceMap = HeliumFetchedConfigManager.shared.getServerProductsPriceMap(),
               let product = priceMap[productId] else {
@@ -141,19 +142,20 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
     ) async throws -> String {
-        let contact = paymentInformation.billingContact
+        let billing = paymentInformation.billingContact
+        let shipping = paymentInformation.shippingContact
 
         var body = baseRequestBody(productId: productId)
         body["customerInfo"] = [
             "paymentMethodId": paymentMethod.id,
-            "name": formatName(from: contact?.name),
-            "email": contact?.emailAddress ?? "",
+            "name": formatName(from: shipping?.name ?? billing?.name),
+            "email": shipping?.emailAddress ?? billing?.emailAddress ?? "",
             "billingAddress": [
-                "line1": contact?.postalAddress?.street ?? "",
-                "city": contact?.postalAddress?.city ?? "",
-                "state": contact?.postalAddress?.state ?? "",
-                "postalCode": contact?.postalAddress?.postalCode ?? "",
-                "country": contact?.postalAddress?.isoCountryCode ?? ""
+                "line1": billing?.postalAddress?.street ?? "",
+                "city": billing?.postalAddress?.city ?? "",
+                "state": billing?.postalAddress?.state ?? "",
+                "postalCode": billing?.postalAddress?.postalCode ?? "",
+                "country": billing?.postalAddress?.isoCountryCode ?? ""
             ]
         ]
 
