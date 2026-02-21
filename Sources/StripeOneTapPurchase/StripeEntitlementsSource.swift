@@ -151,7 +151,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
             "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
             "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
         ]
         guard let bodyData = try? JSONEncoder().encode(body) else { return }
         request.httpBody = bodyData
@@ -162,9 +162,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
                 return
             }
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let entitlementResponse = try decoder.decode(StripeEntitlementResponse.self, from: data)
+            let entitlementResponse = try JSONDecoder().decode(StripeEntitlementResponse.self, from: data)
 
             let activeSubscriptions = entitlementResponse.subscriptions.filter { $0.isActive }
 

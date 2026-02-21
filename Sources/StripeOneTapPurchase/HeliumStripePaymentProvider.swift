@@ -144,11 +144,11 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let contact = paymentInformation.billingContact
 
         var body = baseRequestBody(productId: productId)
-        body["customer_info"] = [
-            "payment_method_id": paymentMethod.id,
+        body["customerInfo"] = [
+            "paymentMethodId": paymentMethod.id,
             "name": formatName(from: contact?.name),
             "email": contact?.emailAddress ?? "",
-            "billing_address": [
+            "billingAddress": [
                 "line1": contact?.postalAddress?.street ?? "",
                 "city": contact?.postalAddress?.city ?? "",
                 "state": contact?.postalAddress?.state ?? "",
@@ -173,7 +173,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     /// subscription (or one-time charge) using the now-confirmed payment method.
     public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
         var body = baseRequestBody(productId: productId)
-        body["payment_method_id"] = paymentMethodId
+        body["paymentMethodId"] = paymentMethodId
 
         let response: ExecutePurchaseResponse = try await post("stripe/execute-purchase", body: body)
         return PaymentSuccessResponse(
@@ -203,9 +203,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             throw HeliumStripeAPIError.serverError(statusCode: http?.statusCode ?? 0, message: message)
         }
 
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(T.self, from: data)
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func baseRequestBody(productId: String) -> [String: Any] {
@@ -216,7 +214,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
             "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
             "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
-            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
         ]
     }
 
