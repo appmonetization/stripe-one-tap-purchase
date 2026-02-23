@@ -86,25 +86,21 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
             return await backupDelegate.makePurchase(productId: productId)
         }
         
-        guard StripeAPI.deviceSupportsApplePay() else { //todo investigate if should use this for targeting
-            return await backupDelegate.makePurchase(productId: productId)
+        guard StripeAPI.deviceSupportsApplePay() else {
+            return .failed(StripeOneTapError.stripeApplePayNotAvailable)
         }
 
         currentProductId = productId
         currentClientSecret = nil
 
-        if let status = await presentApplePayFlow(for: productId) {
-            return status
-        }
-
-        return await backupDelegate.makePurchase(productId: productId)
+        return await presentApplePayFlow(for: productId)
     }
 
     /// Runs the entire Apple Pay flow on the main actor so that
     /// STPApplePayContext and PKPaymentRequest never cross isolation boundaries.
     /// Returns nil if STPApplePayContext could not be created.
     @MainActor
-    private func presentApplePayFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus? {
+    private func presentApplePayFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus {
         let paymentRequest = StripeAPI.paymentRequest(
             withMerchantIdentifier: merchantIdentifier,
             country: countryCode,
@@ -119,7 +115,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         paymentProvider.configurePaymentRequest(paymentRequest, for: productId)
 
         guard let applePayContext = STPApplePayContext(paymentRequest: paymentRequest, delegate: self) else {
-            return nil
+            return .failed(StripeOneTapError.stripeApplePayContextError)
         }
 
         return await withCheckedContinuation { continuation in
@@ -241,6 +237,8 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 enum StripeOneTapError: LocalizedError {
     case noProductId
     case unknownError
+    case stripeApplePayNotAvailable
+    case stripeApplePayContextError
 
     var errorDescription: String? {
         switch self {
@@ -248,6 +246,10 @@ enum StripeOneTapError: LocalizedError {
             return "No product ID set for the current purchase"
         case .unknownError:
             return "An unknown Apple Pay error occurred"
+        case .stripeApplePayNotAvailable:
+            return "Stripe Apple Pay not available on this device"
+        case .stripeApplePayContextError:
+            return "Could not create Stripe Apple Pay context"
         }
     }
 }

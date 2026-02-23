@@ -50,16 +50,14 @@ extension Helium {
         Helium.config.purchaseDelegate = stripeDelegate
         Helium.config.thirdPartyEntitlementsSource = entitlementsSource
         
-        initializeWithApplePayTrait(apiKey: apiKey)
+        ApplePayHelper.shared.setStripeApplePayAvailable(StripeAPI.deviceSupportsApplePay())
+        
+        initialize(apiKey: apiKey)
     }
     
-    func initializeWithApplePayTrait(apiKey: String) {
-        Helium.identify.addUserTraits(HeliumUserTraits([
-            "hlm_device_supports_stripe_apple_pay": StripeAPI.deviceSupportsApplePay()
-        ]))
-        // hmm include apple merchant id too??
-        // and should these be in custom user traits or at helium traits level?
-        initialize(apiKey: apiKey)
+    public func resetStripeEntitlements() {
+        (Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource)?.clearEntitlements()
+        HeliumIdentityManager.shared.setStripeCustomerId(nil)
     }
     
 }

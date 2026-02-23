@@ -114,6 +114,16 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
         }
         if didUpdate { persistData() }
     }
+    
+    open func clearEntitlements() {
+        lock.withLock {
+            cached = nil
+            persisted = []
+        }
+        if let fileURL = persistenceFileURL {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
 
     // MARK: - Private
 
