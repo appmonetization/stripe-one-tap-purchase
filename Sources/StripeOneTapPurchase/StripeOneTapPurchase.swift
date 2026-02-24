@@ -143,6 +143,13 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         try? await provider.updateCustomerMetadata()
     }
 
+    func createPortalSession(returnUrl: String) async throws -> URL {
+        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
+            throw StripeOneTapError.noStripePaymentProvider
+        }
+        return try await provider.createPortalSession(returnUrl: returnUrl)
+    }
+
     private func isPaymentIntentSecret(_ clientSecret: String) -> Bool {
         clientSecret.hasPrefix("pi_")
     }
@@ -244,6 +251,8 @@ enum StripeOneTapError: LocalizedError {
     case unknownError
     case stripeApplePayNotAvailable
     case stripeApplePayContextError
+    case noStripePaymentProvider
+    case stripeOneTapNotInitialized
 
     var errorDescription: String? {
         switch self {
@@ -255,6 +264,10 @@ enum StripeOneTapError: LocalizedError {
             return "Stripe Apple Pay not available on this device"
         case .stripeApplePayContextError:
             return "Could not create Stripe Apple Pay context"
+        case .noStripePaymentProvider:
+            return "Portal session requires HeliumStripePaymentProvider"
+        case .stripeOneTapNotInitialized:
+            return "Call initializeWithStripeOneTap() before using this method"
         }
     }
 }

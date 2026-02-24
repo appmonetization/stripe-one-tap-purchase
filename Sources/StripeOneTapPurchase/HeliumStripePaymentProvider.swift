@@ -196,17 +196,21 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     ) async throws -> Bool {
         let userId = Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId()
         let rcUserId = Helium.identify.revenueCatAppUserId ?? ""
+        let heliumPersistentId = HeliumIdentityManager.shared.getHeliumPersistentId()
+        let appTransactionId = HeliumIdentityManager.shared.getAppTransactionID() ?? ""
 
         var body: [String: Any] = [
             "apiKey": apiKey,
             "userId": userId,
             "rcUserId": rcUserId,
             "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "heliumPersistentId": heliumPersistentId,
+            "appTransactionId": appTransactionId,
             "metadata": [
                 "userId": userId,
                 "rcUserId": rcUserId,
-                "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
-                "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
+                "heliumPersistentId": heliumPersistentId,
+                "appTransactionId": appTransactionId
             ]
         ]
 
@@ -220,6 +224,26 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
             HeliumIdentityManager.shared.setStripeCustomerId(customerId)
         }
         return response.updated ?? false
+    }
+
+    // MARK: - Portal Session
+
+    public func createPortalSession(returnUrl: String) async throws -> URL {
+        let body: [String: Any] = [
+            "apiKey": apiKey,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? "",
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? "",
+            "returnUrl": returnUrl
+        ]
+
+        let response: PortalSessionResponse = try await post("stripe/create-portal-session", body: body)
+        guard let portalUrl = response.portalUrl, let url = URL(string: portalUrl) else {
+            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "No portal URL returned from the server.")
+        }
+        return url
     }
 
     // MARK: - Networking
@@ -282,6 +306,12 @@ private struct ExecutePurchaseResponse: Decodable {
 private struct UpdateCustomerMetadataResponse: Decodable {
     let customerId: String?
     let updated: Bool?
+    let requestId: String?
+}
+
+private struct PortalSessionResponse: Decodable {
+    let portalUrl: String?
+    let customerId: String?
     let requestId: String?
 }
 

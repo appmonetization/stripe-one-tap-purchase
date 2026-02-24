@@ -79,4 +79,27 @@ extension Helium {
         HeliumIdentityManager.shared.setStripeCustomerId(nil)
     }
     
+    /// Creates a Stripe Customer Portal session and returns the portal URL.
+    /// The host app can open this URL in a browser or in-app webview to let
+    /// the user manage their subscriptions, payment methods, and invoices.
+    ///
+    /// - Parameter returnUrl: The URL Stripe redirects to after the user finishes in the portal.
+    /// - Returns: The portal session URL.
+    ///
+    /// ## Example
+    /// ```swift
+    /// do {
+    ///     let portalURL = try await Helium.shared.createStripePortalSession(returnUrl: "myapp://settings")
+    ///     await UIApplication.shared.open(portalURL)
+    /// } catch {
+    ///     print("Failed to create portal session: \(error)")
+    /// }
+    /// ```
+    public func createStripePortalSession(returnUrl: String) async throws -> URL {
+        guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else {
+            throw StripeOneTapError.stripeOneTapNotInitialized
+        }
+        return try await delegate.createPortalSession(returnUrl: returnUrl)
+    }
+    
 }
