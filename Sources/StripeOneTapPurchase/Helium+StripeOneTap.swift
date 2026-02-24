@@ -59,13 +59,12 @@ extension Helium {
     /// `Helium.identify.userId` directly.
     public func setUserIdAndSyncStripeIfNeeded(userId: String) {
         let previousUserId = Helium.identify.userId
+        Helium.identify.userId = userId
         
         guard userId != previousUserId,
               HeliumIdentityManager.shared.getStripeCustomerId() != nil else {
             return
         }
-        
-        Helium.identify.userId = userId
         
         Task {
             guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else { return }
@@ -74,7 +73,10 @@ extension Helium {
     }
     
     /// If you app can potentially support multiple Stripe users on the same device, you'll want to call this to effectively "log out" a Stripe user.
-    public func resetStripeEntitlements() {
+    public func resetStripeEntitlements(clearUserId: Bool) {
+        if clearUserId {
+            Helium.identify.userId = nil
+        }
         (Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource)?.clearEntitlements()
         HeliumIdentityManager.shared.setStripeCustomerId(nil)
     }
