@@ -230,7 +230,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             // Setup intent flow: need to create subscription/charge
                             let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethodId: paymentMethodId ?? "")
                             transactionId = paymentSuccessResponse.transactionId
-                            entitlementsSource?.didCompletePurchase(productId: productId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
+                            entitlementsSource?.didCompletePurchase(heliumProductId: productId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
                         if let transactionId {
                             latestTransactionResult = HeliumTransactionIdResult(

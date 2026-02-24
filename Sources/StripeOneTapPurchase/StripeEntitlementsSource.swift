@@ -18,6 +18,9 @@ struct StripeSubscriptionInfo: Codable, Sendable {
     let subscriptionId: String
     let productId: String
     let status: String
+    let priceId: String?
+    let productName: String?
+    let productDescription: String?
     let currentPeriodEnd: String?
     let cancelAtPeriodEnd: Bool?
     let trialEnd: String?
@@ -32,6 +35,7 @@ struct StripeSubscriptionInfo: Codable, Sendable {
 /// A product entitlement with its subscription expiration date.
 private struct ProductEntitlement: Codable {
     let productId: String
+    let priceId: String?
     /// When the subscription period actually ends (from Stripe's currentPeriodEnd/trialEnd).
     /// Nil for one-time purchases (permanent entitlement).
     let subscriptionExpiresAt: Date?
@@ -39,6 +43,11 @@ private struct ProductEntitlement: Codable {
     var isActive: Bool {
         guard let subscriptionExpiresAt else { return true }
         return Date() < subscriptionExpiresAt
+    }
+
+    var heliumProductId: String {
+        if let priceId { return "\(productId):\(priceId)" }
+        return productId
     }
 }
 
@@ -52,6 +61,14 @@ private struct CachedSnapshot {
 
     var activeProductIds: Set<String> {
         Set(products.filter { $0.isActive }.map { $0.productId })
+    }
+
+    var activeHeliumProductIds: Set<String> {
+        Set(products.filter { $0.isActive }.map { $0.heliumProductId })
+    }
+
+    var activeSubscriptionProductIds: Set<String> {
+        Set(products.filter { $0.subscriptionExpiresAt != nil && $0.isActive }.map { $0.productId })
     }
 }
 
@@ -83,6 +100,11 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
 
     // MARK: - ThirdPartyEntitlementsSource
 
+    open func purchasedHeliumProductIds() async -> Set<String> {
+        await refreshIfNeeded()
+        return lock.withLock { currentHeliumProductIds }
+    }
+
     open func entitledProductIds() async -> Set<String> {
         await refreshIfNeeded()
         return lock.withLock { currentProductIds }
@@ -90,19 +112,29 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
 
     open func hasAnyActiveSubscription() async -> Bool {
         await refreshIfNeeded()
-        return lock.withLock { !currentProductIds.isEmpty }
+        return lock.withLock { !currentSubscriptionProductIds.isEmpty }
+    }
+
+    open func activeSubscriptions() async -> Set<String> {
+        await refreshIfNeeded()
+        return lock.withLock { currentSubscriptionProductIds }
     }
     
     open func refreshEntitlements() async {
         await fetchFromServer()
     }
     
-    open func didCompletePurchase(productId: String, subscriptionExpiresAt: Date?) {
+    open func didCompletePurchase(heliumProductId: String, subscriptionExpiresAt: Date?) {
+        let parts = heliumProductId.split(separator: ":", maxSplits: 1)
+        let productId = String(parts[0])
+        let priceId: String? = parts.count > 1 ? String(parts[1]) : nil
+
         let didUpdate: Bool = lock.withLock {
             guard var products = cached?.products else { return false }
             products.removeAll { $0.productId == productId }
             products.append(ProductEntitlement(
                 productId: productId,
+                priceId: priceId,
                 subscriptionExpiresAt: subscriptionExpiresAt
             ))
             cached = CachedSnapshot(
@@ -133,6 +165,20 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             return cached.activeProductIds
         }
         return Set(persisted.filter { $0.isActive }.map { $0.productId })
+    }
+
+    private var currentHeliumProductIds: Set<String> {
+        if let cached {
+            return cached.activeHeliumProductIds
+        }
+        return Set(persisted.filter { $0.isActive }.map { $0.heliumProductId })
+    }
+
+    private var currentSubscriptionProductIds: Set<String> {
+        if let cached {
+            return cached.activeSubscriptionProductIds
+        }
+        return Set(persisted.filter { $0.subscriptionExpiresAt != nil && $0.isActive }.map { $0.productId })
     }
 
     private func refreshIfNeeded() async {
@@ -181,7 +227,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
                 guard let expiresAt = parseISODate(dateString) else {
                     return nil
                 }
-                return ProductEntitlement(productId: sub.productId, subscriptionExpiresAt: expiresAt)
+                return ProductEntitlement(productId: sub.productId, priceId: sub.priceId, subscriptionExpiresAt: expiresAt)
             }
 
             lock.withLock {
