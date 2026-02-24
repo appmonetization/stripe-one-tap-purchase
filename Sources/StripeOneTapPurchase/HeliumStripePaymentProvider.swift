@@ -3,8 +3,6 @@ import PassKit
 import Foundation
 import Helium
 
-private let heliumBaseURL = "https://api-v2.tryhelium.com/"
-
 private enum OfferPaymentMode {
     static let freeTrial = "FreeTrial"
     static let payAsYouGo = "PayAsYouGo"

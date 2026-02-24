@@ -73,7 +73,6 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
 
     private static let cacheTTL: TimeInterval = 60 * 60 // 60 minutes
 
-    private static let heliumBaseURL = "https://api-v2.tryhelium.com/"
     private static let persistenceFileName = "helium_stripe_entitlements.json"
 
     init(apiKey: String) {
@@ -147,7 +146,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     }
 
     private func fetchFromServer() async {
-        let urlString = Self.heliumBaseURL + "stripe/check-entitlement"
+        let urlString = heliumBaseURL + "stripe/check-entitlement"
         guard let url = URL(string: urlString) else { return }
 
         var request = URLRequest(url: url)

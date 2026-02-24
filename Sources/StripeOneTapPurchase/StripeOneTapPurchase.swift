@@ -2,6 +2,20 @@ import Helium
 import StripeApplePay
 import PassKit
 
+// MARK: - Helium Base URL
+
+let defaultHeliumBaseURL = "https://api-v2.tryhelium.com/"
+var heliumBaseURL: String {
+    guard let custom = Helium.config.customAPIEndpoint,
+          let url = URL(string: custom),
+          let scheme = url.scheme,
+          let host = url.host else {
+        return defaultHeliumBaseURL
+    }
+    let port = url.port.map { ":\($0)" } ?? ""
+    return "\(scheme)://\(host)\(port)/"
+}
+
 // MARK: - Payment Provider Protocol
 
 public protocol StripeOneTapPaymentProvider: Sendable {
