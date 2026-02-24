@@ -154,7 +154,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     
     func syncCustomerMetadata() async {
         guard let provider = paymentProvider as? HeliumStripePaymentProvider else { return }
-        try? await provider.updateCustomerMetadata()
+        let _ = try? await provider.updateCustomerMetadata()
     }
 
     func createPortalSession(returnUrl: String) async throws -> URL {
