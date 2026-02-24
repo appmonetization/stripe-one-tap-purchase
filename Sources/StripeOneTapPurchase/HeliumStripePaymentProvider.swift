@@ -185,6 +185,43 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         )
     }
 
+    // MARK: - Update Customer Metadata
+
+    @discardableResult
+    public func updateCustomerMetadata(
+        name: String? = nil,
+        email: String? = nil,
+        phone: String? = nil,
+        description: String? = nil
+    ) async throws -> Bool {
+        let userId = Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId()
+        let rcUserId = Helium.identify.revenueCatAppUserId ?? ""
+
+        var body: [String: Any] = [
+            "apiKey": apiKey,
+            "userId": userId,
+            "rcUserId": rcUserId,
+            "stripeCustomerId": HeliumIdentityManager.shared.getStripeCustomerId() ?? "",
+            "metadata": [
+                "userId": userId,
+                "rcUserId": rcUserId,
+                "heliumPersistentId": HeliumIdentityManager.shared.getHeliumPersistentId(),
+                "appTransactionId": HeliumIdentityManager.shared.getAppTransactionID() ?? ""
+            ]
+        ]
+
+        if let name { body["name"] = name }
+        if let email { body["email"] = email }
+        if let phone { body["phone"] = phone }
+        if let description { body["description"] = description }
+
+        let response: UpdateCustomerMetadataResponse = try await post("stripe/update-customer-metadata", body: body)
+        if let customerId = response.customerId, HeliumIdentityManager.shared.getStripeCustomerId() == nil {
+            HeliumIdentityManager.shared.setStripeCustomerId(customerId)
+        }
+        return response.updated ?? false
+    }
+
     // MARK: - Networking
 
     private func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
@@ -240,6 +277,12 @@ private struct ExecutePurchaseResponse: Decodable {
     let paymentIntentId: String?
     let status: String?
     let expiresAt: String?
+}
+
+private struct UpdateCustomerMetadataResponse: Decodable {
+    let customerId: String?
+    let updated: Bool?
+    let requestId: String?
 }
 
 // MARK: - Helpers

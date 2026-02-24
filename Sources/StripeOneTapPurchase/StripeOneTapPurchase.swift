@@ -137,6 +137,11 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     open func getLatestCompletedTransactionIdResult() -> HeliumTransactionIdResult? {
         return latestTransactionResult
     }
+    
+    func syncCustomerMetadata() async {
+        guard let provider = paymentProvider as? HeliumStripePaymentProvider else { return }
+        try? await provider.updateCustomerMetadata()
+    }
 
     private func isPaymentIntentSecret(_ clientSecret: String) -> Bool {
         clientSecret.hasPrefix("pi_")

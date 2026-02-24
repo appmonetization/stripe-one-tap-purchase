@@ -55,6 +55,25 @@ extension Helium {
         initialize(apiKey: apiKey)
     }
     
+    /// If your custom user ID can change AFTER a paywall is shown and potential purchase made, make sure to call this instead of setting
+    /// `Helium.identify.userId` directly.
+    public func setUserIdAndSyncStripeIfNeeded(userId: String) {
+        let previousUserId = Helium.identify.userId
+        
+        guard userId != previousUserId,
+              HeliumIdentityManager.shared.getStripeCustomerId() != nil else {
+            return
+        }
+        
+        Helium.identify.userId = userId
+        
+        Task {
+            guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else { return }
+            await delegate.syncCustomerMetadata()
+        }
+    }
+    
+    /// If you app can potentially support multiple Stripe users on the same device, you'll want to call this to effectively "log out" a Stripe user.
     public func resetStripeEntitlements() {
         (Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource)?.clearEntitlements()
         HeliumIdentityManager.shared.setStripeCustomerId(nil)
