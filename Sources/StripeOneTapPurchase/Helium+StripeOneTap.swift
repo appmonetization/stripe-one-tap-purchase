@@ -104,4 +104,13 @@ extension Helium {
         return try await delegate.createPortalSession(returnUrl: returnUrl)
     }
     
+    /// Returns `true` if the user has any active Stripe entitlement (e.g. an active subscription).
+    public func hasActiveStripeEntitlement() async -> Bool {
+        guard let source = Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource else {
+            return false
+        }
+        let productIds = await source.entitledProductIds()
+        return !productIds.isEmpty
+    }
+    
 }
