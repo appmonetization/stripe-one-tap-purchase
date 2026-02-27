@@ -55,19 +55,28 @@ extension Helium {
         initialize(apiKey: apiKey)
     }
     
-    /// If your custom user ID can change AFTER a paywall is shown and potential purchase made, make sure to call this instead of setting
-    /// `Helium.identify.userId` directly.
+    /// If your custom user ID can change AFTER Helium is initialized, make sure to call this
+    /// instead of setting `Helium.identify.userId` directly.
     public func setUserIdAndSyncStripeIfNeeded(userId: String) {
         let previousUserId = Helium.identify.userId
         Helium.identify.userId = userId
         
-        guard userId != previousUserId,
-              HeliumIdentityManager.shared.getStripeCustomerId() != nil else {
+        guard userId != previousUserId else {
+            return
+        }
+        guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else {
+            return
+        }
+        guard Helium.shared.getDownloadStatus() != .notDownloadedYet else {
             return
         }
         
         Task {
-            guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else { return }
+            if HeliumIdentityManager.shared.getStripeCustomerId() == nil {
+                // See if entitlements are changed for new user ID
+                await delegate.refreshEntitlements()
+                return
+            }
             await delegate.syncCustomerMetadata()
         }
     }

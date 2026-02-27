@@ -87,6 +87,8 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     private var cached: CachedSnapshot?
     /// Cold-start fallback — loaded from disk, used only until first fetch completes.
     private var persisted: [ProductEntitlement] = []
+    /// Tracks the in-flight fetch so newer requests can cancel stale ones.
+    private var currentFetchTask: Task<Void, Never>?
 
     private static let cacheTTL: TimeInterval = 60 * 60 // 60 minutes
 
@@ -192,6 +194,16 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     }
 
     private func fetchFromServer() async {
+        let task: Task<Void, Never> = lock.withLock {
+            currentFetchTask?.cancel()
+            let t = Task { [self] in await performFetch() }
+            currentFetchTask = t
+            return t
+        }
+        await task.value
+    }
+
+    private func performFetch() async {
         let urlString = heliumBaseURL + "stripe/check-entitlement"
         guard let url = URL(string: urlString) else { return }
 
@@ -216,6 +228,9 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
             guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                 return
             }
+
+            // If superseded by a newer fetch, discard this result
+            guard !Task.isCancelled else { return }
 
             let entitlementResponse = try JSONDecoder().decode(StripeEntitlementResponse.self, from: data)
 
