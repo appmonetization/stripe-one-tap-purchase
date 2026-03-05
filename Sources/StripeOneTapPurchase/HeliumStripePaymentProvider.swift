@@ -100,7 +100,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         if #available(iOS 16.0, *) {
             let regularBilling = PKRecurringPaymentSummaryItem(label: label, amount: price)
             regularBilling.intervalUnit = calendarUnit(from: subscription.periodUnit)
-            regularBilling.intervalCount = subscription.periodValue
+            regularBilling.intervalCount = calendarIntervalCount(from: subscription.periodUnit, value: subscription.periodValue)
 
             if introOffer != nil {
                 regularBilling.startDate = regularStartDate
@@ -118,7 +118,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
                     amount: NSDecimalNumber(decimal: offer.price)
                 )
                 trialBilling.intervalUnit = calendarUnit(from: offer.periodUnit)
-                trialBilling.intervalCount = offer.periodValue
+                trialBilling.intervalCount = calendarIntervalCount(from: offer.periodUnit, value: offer.periodValue)
                 recurringRequest.trialBilling = trialBilling
 
                 recurringRequest.billingAgreement = buildBillingAgreement(
@@ -319,14 +319,24 @@ private struct PortalSessionResponse: Decodable {
 
 // MARK: - Helpers
 
+/// Returns a valid `NSCalendar.Unit` for `PKRecurringPaymentSummaryItem`.
+/// Apple Pay only supports year, month, day, hour, minute — **not** week.
 private func calendarUnit(from periodUnit: String) -> NSCalendar.Unit {
     switch periodUnit.lowercased() {
     case "day": return .day
-    case "week": return .weekOfMonth
+    case "week": return .day      // weeks → days (multiply intervalCount by 7)
     case "month": return .month
     case "year": return .year
     default: return .month
     }
+}
+
+/// Converts the interval count to match `calendarUnit(from:)`.
+/// Apple Pay doesn't support "week" as an intervalUnit, so we express it as days.
+/// Stripe treats 1 week as exactly 7 days, so hardcoding * 7 is safe.
+/// See: https://docs.stripe.com/billing/subscriptions/mixed-interval
+private func calendarIntervalCount(from periodUnit: String, value: Int) -> Int {
+    periodUnit.lowercased() == "week" ? value * 7 : value
 }
 
 private func calendarComponent(from periodUnit: String) -> Calendar.Component {
