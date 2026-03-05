@@ -240,7 +240,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             latestTransactionResult = HeliumTransactionIdResult(
                                 productId: productId,
                                 transactionId: transactionId,
-                                originalTransactionId: nil
+                                originalTransactionId: transactionId
                             )
                         }
                     }

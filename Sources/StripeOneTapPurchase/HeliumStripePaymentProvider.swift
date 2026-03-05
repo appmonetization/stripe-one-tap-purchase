@@ -179,7 +179,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         return PaymentSuccessResponse(
             productId: productId,
             expiresAt: parseISODate(response.expiresAt),
-            transactionId: response.subscriptionId ?? response.paymentIntentId
+            transactionId: response.subscriptionItemId ?? response.subscriptionId ?? response.paymentIntentId
         )
     }
 
@@ -296,9 +296,13 @@ private struct SetupIntentResponse: Decodable {
 
 private struct ExecutePurchaseResponse: Decodable {
     let subscriptionId: String?
+    let subscriptionItemId: String?
+    let productId: String?
+    let priceId: String?
     let paymentIntentId: String?
     let status: String?
     let expiresAt: String?
+    let requestId: String?
 }
 
 private struct UpdateCustomerMetadataResponse: Decodable {
