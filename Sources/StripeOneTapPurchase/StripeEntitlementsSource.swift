@@ -87,8 +87,9 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     private var cached: CachedSnapshot?
     /// Cold-start fallback — loaded from disk, used only until first fetch completes.
     private var persisted: [ProductEntitlement] = []
-    /// Tracks the in-flight fetch so newer requests can cancel stale ones.
+    /// Tracks the in-flight fetch so concurrent callers coalesce onto one request.
     private var currentFetchTask: Task<Void, Never>?
+    private var fetchId: UInt = 0
 
     private static let cacheTTL: TimeInterval = 60 * 60 // 60 minutes
 
@@ -123,7 +124,7 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
     }
     
     open func refreshEntitlements() async {
-        await fetchFromServer()
+        await fetchFromServer(forceNew: true)
     }
     
     open func didCompletePurchase(heliumProductId: String, subscriptionExpiresAt: Date?) {
@@ -193,14 +194,28 @@ open class StripeEntitlementsSource: ThirdPartyEntitlementsSource, @unchecked Se
         }
     }
 
-    private func fetchFromServer() async {
-        let task: Task<Void, Never> = lock.withLock {
+    private func fetchFromServer(forceNew: Bool = false) async {
+        let (task, myId): (Task<Void, Never>, UInt) = lock.withLock {
+            // If there's already an in-flight fetch, just await it.
+            // Only force a new fetch when explicitly requested.
+            if !forceNew, let existing = currentFetchTask {
+                return (existing, fetchId)
+            }
             currentFetchTask?.cancel()
+            fetchId += 1
+            let id = fetchId
             let t = Task { [self] in await performFetch() }
             currentFetchTask = t
-            return t
+            return (t, id)
         }
         await task.value
+        // Clear the task ref so future calls (e.g. after cache TTL) create a new fetch.
+        // Only clear if no newer fetch has replaced ours.
+        lock.withLock {
+            if fetchId == myId {
+                currentFetchTask = nil
+            }
+        }
     }
 
     private func performFetch() async {
