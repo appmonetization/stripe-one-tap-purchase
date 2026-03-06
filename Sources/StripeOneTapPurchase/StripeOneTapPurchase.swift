@@ -58,7 +58,7 @@ extension StripeOneTapPaymentProvider {
 
 open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, HeliumDelegateReturnsTransaction, @unchecked Sendable {
 
-    public var delegateType: String { "h_stripe_one_tap" }
+    public var delegateType: String { "h_stripe_w_" + backupDelegate.delegateType }
 
     private let backupDelegate: HeliumPaywallDelegate
     private let paymentProvider: StripeOneTapPaymentProvider
@@ -185,6 +185,11 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         currentClientSecret = nil
         currentPaymentMethodId = nil
     }
+    
+    public func onPaywallEvent(_ event: any HeliumEvent) {
+        backupDelegate.onPaywallEvent(event)
+    }
+    
 }
 
 // MARK: - ApplePayContextDelegate
