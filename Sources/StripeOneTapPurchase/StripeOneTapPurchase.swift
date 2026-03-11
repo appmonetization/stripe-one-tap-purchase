@@ -39,7 +39,7 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse
 }
 
-public struct PaymentSuccessResponse {
+public struct PaymentSuccessResponse: Sendable {
     let productId: String
     let expiresAt: Date?
     let transactionId: String?
