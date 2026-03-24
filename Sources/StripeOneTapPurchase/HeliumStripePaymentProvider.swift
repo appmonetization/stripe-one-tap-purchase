@@ -244,6 +244,29 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         return url
     }
 
+    // MARK: - Checkout Session
+
+    /// Creates a Stripe Checkout Session and returns the hosted checkout URL.
+    /// Used for the app2web flow when Apple Pay is not available.
+    public func createCheckoutSession(
+        productPriceId: String,
+        successURL: String,
+        cancelURL: String
+    ) async throws -> (checkoutURL: URL, sessionId: String) {
+        var body = baseRequestBody(productId: productPriceId)
+        body["successUrl"] = successURL
+        body["cancelUrl"] = cancelURL
+
+        let response: CheckoutSessionResponse = try await post("stripe/create-checkout-session", body: body)
+        if let stripeCustomerId = response.stripeCustomerId {
+            HeliumIdentityManager.shared.setStripeCustomerId(stripeCustomerId)
+        }
+        guard let checkoutUrlString = response.checkoutURL, let url = URL(string: checkoutUrlString) else {
+            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "No checkout URL returned from the server.")
+        }
+        return (checkoutURL: url, sessionId: response.sessionId ?? "")
+    }
+
     // MARK: - Networking
 
     private func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
@@ -309,6 +332,12 @@ private struct UpdateCustomerMetadataResponse: Decodable {
     let customerId: String?
     let updated: Bool?
     let requestId: String?
+}
+
+private struct CheckoutSessionResponse: Decodable {
+    let checkoutURL: String?
+    let sessionId: String?
+    let stripeCustomerId: String?
 }
 
 private struct PortalSessionResponse: Decodable {

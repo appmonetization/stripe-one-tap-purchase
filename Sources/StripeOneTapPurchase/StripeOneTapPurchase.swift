@@ -1,6 +1,7 @@
 import Helium
 import StripeApplePay
 import PassKit
+import UIKit
 
 // MARK: - Helium Base URL
 
@@ -66,6 +67,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private let countryCode: String
     private let currencyCode: String
     private let entitlementsSource: StripeEntitlementsSource?
+    private let useStripeCheckout: Bool
 
     private var currentProductId: String?
     private var currentClientSecret: String?
@@ -79,7 +81,8 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         merchantIdentifier: String,
         countryCode: String = "US",
         currencyCode: String = "USD",
-        entitlementsSource: StripeEntitlementsSource?
+        entitlementsSource: StripeEntitlementsSource?,
+        useStripeCheckout: Bool = false
     ) {
         self.backupDelegate = backupDelegate
         self.paymentProvider = paymentProvider
@@ -87,6 +90,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         self.countryCode = countryCode
         self.currencyCode = currencyCode
         self.entitlementsSource = entitlementsSource
+        self.useStripeCheckout = useStripeCheckout
         super.init()
     }
 
@@ -99,15 +103,15 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         if !allStripeProductIds.contains(productId) {
             return await backupDelegate.makePurchase(productId: productId)
         }
-        
-        guard StripeAPI.deviceSupportsApplePay() else {
-            return .failed(StripeOneTapError.stripeApplePayNotAvailable)
-        }
 
         currentProductId = productId
         currentClientSecret = nil
 
-        return await presentApplePayFlow(for: productId)
+        if !useStripeCheckout && StripeAPI.deviceSupportsApplePay() {
+            return await presentApplePayFlow(for: productId)
+        } else {
+            return await presentStripeCheckoutFlow(for: productId)
+        }
     }
 
     /// Runs the entire Apple Pay flow on the main actor so that
@@ -135,6 +139,65 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         return await withCheckedContinuation { continuation in
             self.purchaseContinuation = continuation
             applePayContext.presentApplePay()
+        }
+    }
+
+    /// Loads the Stripe Hosted Checkout page in a WKWebView.
+    /// Used when Apple Pay is not available on the device.
+    @MainActor
+    private func presentStripeCheckoutFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus {
+        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
+            return .failed(StripeOneTapError.noStripePaymentProvider)
+        }
+
+        let checkoutURL: URL
+        let sessionId: String
+        do {
+            let result = try await provider.createCheckoutSession(
+                productPriceId: productId,
+                successURL: StripeCheckoutRedirect.successURL,
+                cancelURL: StripeCheckoutRedirect.cancelURL
+            )
+            checkoutURL = result.checkoutURL
+            sessionId = result.sessionId
+        } catch {
+            return .failed(error)
+        }
+
+        guard let topVC = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow })?
+            .rootViewController?
+            .topMostViewController() else {
+            return .failed(StripeOneTapError.checkoutWebViewFailed)
+        }
+
+        return await withCheckedContinuation { continuation in
+            self.purchaseContinuation = continuation
+            let checkoutVC = StripeCheckoutViewController(checkoutURL: checkoutURL) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success(let returnedSessionId):
+                    let txnId = returnedSessionId ?? sessionId
+                    if !txnId.isEmpty {
+                        self.latestTransactionResult = HeliumTransactionIdResult(
+                            productId: productId,
+                            transactionId: txnId,
+                            originalTransactionId: txnId
+                        )
+                    }
+                    Task {
+                        await self.entitlementsSource?.refreshEntitlements()
+                        self.resumePurchase(with: .purchased)
+                    }
+                case .cancelled:
+                    self.resumePurchase(with: .cancelled)
+                case .failed(let error):
+                    self.resumePurchase(with: .failed(error))
+                }
+            }
+            topVC.present(checkoutVC, animated: true)
         }
     }
 
@@ -276,6 +339,8 @@ enum StripeOneTapError: LocalizedError {
     case stripeApplePayContextError
     case noStripePaymentProvider
     case stripeOneTapNotInitialized
+    case checkoutSessionCreationFailed
+    case checkoutWebViewFailed
 
     var errorDescription: String? {
         switch self {
@@ -291,6 +356,27 @@ enum StripeOneTapError: LocalizedError {
             return "Portal session requires HeliumStripePaymentProvider"
         case .stripeOneTapNotInitialized:
             return "Call initializeWithStripeOneTap() before using this method"
+        case .checkoutSessionCreationFailed:
+            return "Failed to create Stripe Checkout session"
+        case .checkoutWebViewFailed:
+            return "Could not present the checkout web view"
         }
+    }
+}
+
+// MARK: - UIViewController Helper
+
+private extension UIViewController {
+    func topMostViewController() -> UIViewController {
+        if let presented = presentedViewController {
+            return presented.topMostViewController()
+        }
+        if let nav = self as? UINavigationController, let visible = nav.visibleViewController {
+            return visible.topMostViewController()
+        }
+        if let tab = self as? UITabBarController, let selected = tab.selectedViewController {
+            return selected.topMostViewController()
+        }
+        return self
     }
 }

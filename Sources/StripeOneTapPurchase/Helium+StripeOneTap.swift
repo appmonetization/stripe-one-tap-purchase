@@ -23,7 +23,9 @@ extension Helium {
     ///   - paymentProvider: Custom payment provider. When `nil`, a default ``HeliumStripePaymentProvider``
     ///     is created using `apiKey` and `managementURL`.
     ///   - countryCode: Two-letter ISO country code for the merchant. Defaults to `"US"`.
-    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.   
+    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.
+    ///   - useStripeCheckout: When `true`, always use Stripe Hosted Checkout (web) instead of Apple Pay.
+    ///     When `false` (the default), Apple Pay is used if available, otherwise Stripe Checkout is used.
     public func initializeWithStripeOneTap(
         apiKey: String,
         stripePublishableKey: String,
@@ -33,7 +35,8 @@ extension Helium {
         managementURL: URL,
         paymentProvider: StripeOneTapPaymentProvider? = nil,
         countryCode: String = "US",
-        currencyCode: String = "USD"
+        currencyCode: String = "USD",
+        useStripeCheckout: Bool = false
     ) {
         StripeAPI.defaultPublishableKey = stripePublishableKey
         
@@ -45,7 +48,8 @@ extension Helium {
             merchantIdentifier: merchantIdentifier,
             countryCode: countryCode,
             currencyCode: currencyCode,
-            entitlementsSource: entitlementsSource
+            entitlementsSource: entitlementsSource,
+            useStripeCheckout: useStripeCheckout
         )
         Helium.config.purchaseDelegate = stripeDelegate
         Helium.config.thirdPartyEntitlementsSource = entitlementsSource
