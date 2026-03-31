@@ -28,11 +28,10 @@ extension Helium {
     ///     Apple Pay is used if available, otherwise falls back to `.webView`.
     ///     Set to `.safariInApp` or `.externalBrowser` to always use Stripe Checkout
     ///     (requires `checkoutSuccessURL` and `checkoutCancelURL`).
-    ///   - checkoutSuccessURL: Deep link URL for Stripe to redirect to on successful payment.
-    ///     Required for `.safariInApp` and `.externalBrowser` styles. Include `{CHECKOUT_SESSION_ID}`
-    ///     in the URL to receive the session ID (e.g. `"myapp://checkout/success?session_id={CHECKOUT_SESSION_ID}"`).
-    ///   - checkoutCancelURL: Deep link URL for Stripe to redirect to on cancellation.
-    ///     Required for `.safariInApp` and `.externalBrowser` styles.
+    ///   - checkoutSuccessURL: Optional HTTPS URL for Stripe to redirect to on successful payment.
+    ///     If not provided, a default Helium URL is used. Include `{CHECKOUT_SESSION_ID}` to receive the session ID.
+    ///   - checkoutCancelURL: Optional HTTPS URL for Stripe to redirect to on cancellation.
+    ///     If not provided, a default Helium URL is used.
     public func initializeWithStripeOneTap(
         apiKey: String,
         stripePublishableKey: String,
@@ -128,24 +127,6 @@ extension Helium {
         return try await delegate.createPortalSession(returnUrl: returnUrl)
     }
     
-    /// Call this from your app's deep link handler (`application(_:open:options:)` or
-    /// `scene(_:openURLContexts:)`) to complete a Stripe Checkout purchase.
-    /// Required when using `.safariInApp` or `.externalBrowser` checkout styles.
-    ///
-    /// ```swift
-    /// func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    ///     if let url = URLContexts.first?.url {
-    ///         Helium.shared.handleStripeCheckoutRedirect(url: url)
-    ///     }
-    /// }
-    /// ```
-    public func handleStripeCheckoutRedirect(url: URL) {
-        guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else {
-            return
-        }
-        delegate.handleCheckoutRedirect(url: url)
-    }
-
     /// Returns `true` if the user has any active Stripe entitlement (e.g. an active subscription).
     public func hasActiveStripeEntitlement() async -> Bool {
         guard let source = Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource else {

@@ -24,10 +24,39 @@ var heliumBaseURL: String {
 public enum StripeCheckoutStyle: Sendable {
     /// Embedded WKWebView (default). No deep link setup required.
     case webView
-    /// SFSafariViewController. Requires the host app to handle the deep link callback.
+    /// SFSafariViewController. The SDK automatically detects when the user returns.
     case safariInApp
-    /// Opens in the default browser. Requires the host app to handle the deep link callback.
+    /// Opens in the default browser. The SDK automatically detects when the user returns.
     case externalBrowser
+}
+
+// MARK: - Pending Checkout Persistence
+
+/// Persisted state for checkout sessions that survive app termination.
+private struct PendingCheckout: Codable {
+    let productId: String
+    let sessionId: String
+    let timestamp: Date
+
+    var isExpired: Bool {
+        Date().timeIntervalSince(timestamp) > 24 * 60 * 60 // Stripe sessions expire after max 24h
+    }
+
+    private static let key = "helium_pending_stripe_checkout"
+
+    static func save(_ checkout: PendingCheckout) {
+        guard let data = try? JSONEncoder().encode(checkout) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    static func load() -> PendingCheckout? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(PendingCheckout.self, from: data)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
 }
 
 // MARK: - Payment Provider Protocol
@@ -90,6 +119,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private var currentSessionId: String?
     private var purchaseContinuation: CheckedContinuation<HeliumPaywallTransactionStatus, Never>?
     private var latestTransactionResult: HeliumTransactionIdResult?
+    private var foregroundObserver: NSObjectProtocol?
 
     public init(
         backupDelegate: HeliumPaywallDelegate,
@@ -112,10 +142,14 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         self.checkoutSuccessURL = checkoutSuccessURL
         self.checkoutCancelURL = checkoutCancelURL
         super.init()
+        resolvePendingCheckoutIfNeeded()
     }
 
     deinit {
         purchaseContinuation?.resume(returning: .cancelled)
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
     }
 
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
@@ -170,21 +204,8 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         }
 
         let style = checkoutStyle ?? .webView
-
-        // For webView, use SDK-controlled redirect URLs; for safari/browser, use host app's URLs
-        let successURL: String
-        let cancelURL: String
-        switch style {
-        case .webView:
-            successURL = StripeCheckoutRedirect.successURL
-            cancelURL = StripeCheckoutRedirect.cancelURL
-        case .safariInApp, .externalBrowser:
-            guard let appSuccessURL = checkoutSuccessURL, let appCancelURL = checkoutCancelURL else {
-                return .failed(StripeOneTapError.checkoutRedirectURLsMissing)
-            }
-            successURL = appSuccessURL
-            cancelURL = appCancelURL
-        }
+        let successURL = checkoutSuccessURL ?? StripeCheckoutRedirect.successURL
+        let cancelURL = checkoutCancelURL ?? StripeCheckoutRedirect.cancelURL
 
         let checkoutURL: URL
         let sessionId: String
@@ -200,55 +221,154 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
             return .failed(error)
         }
 
-        self.currentSessionId = sessionId
+        currentSessionId = sessionId
 
-        // External browser doesn't need a presenting VC
-        if style == .externalBrowser {
-            await UIApplication.shared.open(checkoutURL)
-            return await withCheckedContinuation { continuation in
-                self.purchaseContinuation = continuation
-            }
+        switch style {
+        case .webView:
+            return await presentWebViewCheckout(checkoutURL: checkoutURL)
+        case .safariInApp:
+            PendingCheckout.save(PendingCheckout(productId: productId, sessionId: sessionId, timestamp: Date()))
+            return await presentSafariCheckout(checkoutURL: checkoutURL)
+        case .externalBrowser:
+            PendingCheckout.save(PendingCheckout(productId: productId, sessionId: sessionId, timestamp: Date()))
+            return await presentExternalBrowserCheckout(checkoutURL: checkoutURL)
         }
+    }
 
+    @MainActor
+    private func presentWebViewCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
         guard let topVC = Self.topViewController() else {
             return .failed(StripeOneTapError.checkoutWebViewFailed)
         }
 
         return await withCheckedContinuation { continuation in
             self.purchaseContinuation = continuation
-
-            let vc: UIViewController
-            switch style {
-            case .webView:
-                vc = StripeCheckoutViewController(checkoutURL: checkoutURL) { [weak self] result in
-                    guard let self else { return }
-                    self.completeCheckout(result: result)
-                }
-            case .safariInApp:
-                let safariVC = SFSafariViewController(url: checkoutURL)
-                safariVC.delegate = self
-                vc = safariVC
-            case .externalBrowser:
-                return // unreachable, handled above
+            let checkoutVC = StripeCheckoutViewController(checkoutURL: checkoutURL) { [weak self] result in
+                guard let self else { return }
+                completeCheckout(result: result)
             }
-            topVC.present(vc, animated: true)
+            topVC.present(checkoutVC, animated: true)
         }
     }
 
-    /// Called by the host app when it receives a deep link from Stripe Checkout.
-    /// Use this for `.safariInApp` and `.externalBrowser` checkout styles.
-    func handleCheckoutRedirect(url: URL) {
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let returnedSessionId = components?.queryItems?.first(where: { $0.name == "session_id" })?.value
+    @MainActor
+    private func presentSafariCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
+        guard let topVC = Self.topViewController() else {
+            return .failed(StripeOneTapError.checkoutWebViewFailed)
+        }
 
-        // Determine if this is a success or cancel URL
-        if let successURL = checkoutSuccessURL,
-           url.absoluteString.hasPrefix(successURL.components(separatedBy: "?").first ?? successURL) {
-            completeCheckout(result: .success(sessionId: returnedSessionId))
-        } else {
-            completeCheckout(result: .cancelled)
+        let safariVC = SFSafariViewController(url: checkoutURL)
+        safariVC.delegate = self
+
+        return await withCheckedContinuation { continuation in
+            self.purchaseContinuation = continuation
+            startForegroundObserver()
+            topVC.present(safariVC, animated: true)
         }
     }
+
+    @MainActor
+    private func presentExternalBrowserCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
+        await UIApplication.shared.open(checkoutURL)
+
+        return await withCheckedContinuation { continuation in
+            self.purchaseContinuation = continuation
+            startForegroundObserver()
+        }
+    }
+
+    // MARK: - Foreground Observer
+
+    private func startForegroundObserver() {
+        stopForegroundObserver()
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.onReturnedToForeground()
+        }
+    }
+
+    private func stopForegroundObserver() {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
+        foregroundObserver = nil
+    }
+
+    private func onReturnedToForeground() {
+        guard let sessionId = currentSessionId, purchaseContinuation != nil else { return }
+        stopForegroundObserver()
+
+        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
+            resumePurchase(with: .failed(StripeOneTapError.noStripePaymentProvider))
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let confirmation = try await provider.confirmCheckoutSession(sessionId: sessionId)
+                PendingCheckout.clear()
+                // Dismiss SFSafariViewController if present
+                await MainActor.run {
+                    if let topVC = Self.topViewController(), topVC is SFSafariViewController {
+                        topVC.dismiss(animated: true)
+                    }
+                }
+                let txnId = confirmation.transactionId ?? sessionId
+                let productId = currentProductId ?? confirmation.productId
+                latestTransactionResult = HeliumTransactionIdResult(
+                    productId: productId,
+                    transactionId: txnId,
+                    originalTransactionId: txnId
+                )
+                entitlementsSource?.didCompletePurchase(
+                    heliumProductId: productId,
+                    subscriptionExpiresAt: confirmation.expiresAt
+                )
+                resumePurchase(with: .purchased)
+            } catch {
+                // Session not completed — user came back without paying, treat as cancelled
+                PendingCheckout.clear()
+                resumePurchase(with: .cancelled)
+            }
+        }
+    }
+
+    // MARK: - Pending Checkout Recovery (app terminated)
+
+    private func resolvePendingCheckoutIfNeeded() {
+        guard let pending = PendingCheckout.load() else { return }
+        PendingCheckout.clear()
+
+        guard !pending.isExpired else { return }
+        guard let provider = paymentProvider as? HeliumStripePaymentProvider else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let confirmation = try await provider.confirmCheckoutSession(sessionId: pending.sessionId)
+                let txnId = confirmation.transactionId ?? pending.sessionId
+                let productId = confirmation.productId.isEmpty ? pending.productId : confirmation.productId
+                latestTransactionResult = HeliumTransactionIdResult(
+                    productId: productId,
+                    transactionId: txnId,
+                    originalTransactionId: txnId
+                )
+                entitlementsSource?.didCompletePurchase(
+                    heliumProductId: pending.productId,
+                    subscriptionExpiresAt: confirmation.expiresAt
+                )
+            } catch {
+                // Session wasn't completed — nothing to recover
+            }
+        }
+    }
+
+    // MARK: - Checkout Completion
 
     private func completeCheckout(result: StripeCheckoutResult) {
         guard let productId = currentProductId else { return }
@@ -338,6 +458,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     private func resumePurchase(with status: sending HeliumPaywallTransactionStatus) {
+        stopForegroundObserver()
         purchaseContinuation?.resume(returning: status)
         purchaseContinuation = nil
         currentProductId = nil
@@ -431,7 +552,9 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 
 extension StripeOneTapPurchaseDelegate: SFSafariViewControllerDelegate {
     public func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
-        resumePurchase(with: .cancelled)
+        // User tapped "Done" — they may have completed payment first.
+        // Check with the server before deciding.
+        onReturnedToForeground()
     }
 }
 
@@ -446,7 +569,6 @@ enum StripeOneTapError: LocalizedError {
     case stripeOneTapNotInitialized
     case checkoutSessionCreationFailed
     case checkoutWebViewFailed
-    case checkoutRedirectURLsMissing
 
     var errorDescription: String? {
         switch self {
@@ -466,8 +588,6 @@ enum StripeOneTapError: LocalizedError {
             return "Failed to create Stripe Checkout session"
         case .checkoutWebViewFailed:
             return "Could not present the checkout web view"
-        case .checkoutRedirectURLsMissing:
-            return "checkoutSuccessURL and checkoutCancelURL are required for safariInApp and externalBrowser checkout styles"
         }
     }
 }
