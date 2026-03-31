@@ -330,10 +330,13 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
                     subscriptionExpiresAt: confirmation.expiresAt
                 )
                 resumePurchase(with: .purchased)
-            } catch {
-                // Session not completed — user came back without paying, treat as cancelled
+            } catch HeliumStripeAPIError.checkoutSessionNotCompleted {
+                // Session not completed — user came back without paying
                 PendingCheckout.clear()
                 resumePurchase(with: .cancelled)
+            } catch {
+                // Network/server error — don't clear pending state, keep it for retry
+                resumePurchase(with: .failed(error))
             }
         }
     }

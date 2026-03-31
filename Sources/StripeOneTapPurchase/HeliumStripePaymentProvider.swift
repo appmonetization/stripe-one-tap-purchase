@@ -278,7 +278,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let response: ExecutePurchaseResponse = try await post("stripe/confirm-checkout", body: body)
 
         guard response.status == "complete" || response.transactionId != nil else {
-            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "Checkout session not completed")
+            throw HeliumStripeAPIError.checkoutSessionNotCompleted
         }
 
         return response.toPaymentSuccessResponse()
@@ -450,6 +450,7 @@ private func buildBillingAgreement(product: ServerProductPrice, offer: Subscript
 enum HeliumStripeAPIError: LocalizedError {
     case serverError(statusCode: Int, message: String)
     case invalidEndpoint(path: String)
+    case checkoutSessionNotCompleted
 
     var errorDescription: String? {
         switch self {
@@ -457,6 +458,8 @@ enum HeliumStripeAPIError: LocalizedError {
             return "Helium Stripe API error (\(statusCode)): \(message)"
         case .invalidEndpoint(let path):
             return "Invalid endpoint \(path)"
+        case .checkoutSessionNotCompleted:
+            return "Checkout session has not been completed"
         }
     }
 }
