@@ -176,11 +176,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         body["paymentMethodId"] = paymentMethodId
 
         let response: ExecutePurchaseResponse = try await post("stripe/execute-purchase", body: body)
-        return PaymentSuccessResponse(
-            productId: productId,
-            expiresAt: parseISODate(response.expiresAt),
-            transactionId: response.subscriptionItemId ?? response.subscriptionId ?? response.paymentIntentId
-        )
+        return response.toPaymentSuccessResponse(fallbackProductId: productId)
     }
 
     // MARK: - Update Customer Metadata
@@ -267,6 +263,27 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         return (checkoutURL: url, sessionId: response.sessionId ?? "")
     }
 
+    // MARK: - Confirm Checkout
+
+    /// Confirms a completed Stripe Checkout Session and returns the purchase details.
+    /// Throws if the session has not been completed yet.
+    public func confirmCheckoutSession(sessionId: String) async throws -> PaymentSuccessResponse {
+        let body: [String: Any] = [
+            "apiKey": apiKey,
+            "sessionId": sessionId,
+            "userId": Helium.identify.userId ?? HeliumIdentityManager.shared.getHeliumPersistentId(),
+            "rcUserId": Helium.identify.revenueCatAppUserId ?? ""
+        ]
+
+        let response: ExecutePurchaseResponse = try await post("stripe/confirm-checkout", body: body)
+
+        guard response.status == "complete" || response.transactionId != nil else {
+            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "Checkout session not completed")
+        }
+
+        return response.toPaymentSuccessResponse()
+    }
+
     // MARK: - Networking
 
     private func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
@@ -326,6 +343,19 @@ private struct ExecutePurchaseResponse: Decodable {
     let status: String?
     let expiresAt: String?
     let requestId: String?
+
+    /// Canonical transaction ID derivation — used by both execute-purchase and confirm-checkout flows.
+    var transactionId: String? {
+        subscriptionItemId ?? subscriptionId ?? paymentIntentId
+    }
+
+    func toPaymentSuccessResponse(fallbackProductId: String = "") -> PaymentSuccessResponse {
+        PaymentSuccessResponse(
+            productId: productId ?? fallbackProductId,
+            expiresAt: parseISODate(expiresAt),
+            transactionId: transactionId
+        )
+    }
 }
 
 private struct UpdateCustomerMetadataResponse: Decodable {

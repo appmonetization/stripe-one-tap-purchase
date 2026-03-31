@@ -256,15 +256,30 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
         switch result {
         case .success(let returnedSessionId):
-            let txnId = returnedSessionId ?? sessionId
-            if !txnId.isEmpty {
-                latestTransactionResult = HeliumTransactionIdResult(
-                    productId: productId,
-                    transactionId: txnId,
-                    originalTransactionId: txnId
-                )
+            let resolvedSessionId = returnedSessionId ?? sessionId
+            guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
+                resumePurchase(with: .failed(StripeOneTapError.noStripePaymentProvider))
+                return
             }
-            resumePurchase(with: .purchased)
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let confirmation = try await provider.confirmCheckoutSession(sessionId: resolvedSessionId)
+                    let txnId = confirmation.transactionId ?? resolvedSessionId
+                    latestTransactionResult = HeliumTransactionIdResult(
+                        productId: confirmation.productId.isEmpty ? productId : confirmation.productId,
+                        transactionId: txnId,
+                        originalTransactionId: txnId
+                    )
+                    entitlementsSource?.didCompletePurchase(
+                        heliumProductId: productId,
+                        subscriptionExpiresAt: confirmation.expiresAt
+                    )
+                    resumePurchase(with: .purchased)
+                } catch {
+                    resumePurchase(with: .failed(error))
+                }
+            }
         case .cancelled:
             resumePurchase(with: .cancelled)
         case .failed(let error):
