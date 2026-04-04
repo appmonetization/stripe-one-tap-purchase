@@ -2,62 +2,6 @@ import Helium
 import StripeApplePay
 import PassKit
 import UIKit
-import SafariServices
-
-// MARK: - Helium Base URL
-
-let defaultHeliumBaseURL = "https://api-v2.tryhelium.com/"
-var heliumBaseURL: String {
-    guard let custom = Helium.config.customAPIEndpoint,
-          let url = URL(string: custom),
-          let scheme = url.scheme,
-          let host = url.host else {
-        return defaultHeliumBaseURL
-    }
-    let port = url.port.map { ":\($0)" } ?? ""
-    return "\(scheme)://\(host)\(port)/"
-}
-
-// MARK: - Checkout Style
-
-/// Controls how Stripe Checkout is presented when Apple Pay is not used.
-public enum StripeCheckoutStyle: Sendable {
-    /// Embedded WKWebView (default). No deep link setup required.
-    case webView
-    /// SFSafariViewController. The SDK automatically detects when the user returns.
-    case safariInApp
-    /// Opens in the default browser. The SDK automatically detects when the user returns.
-    case externalBrowser
-}
-
-// MARK: - Pending Checkout Persistence
-
-/// Persisted state for checkout sessions that survive app termination.
-private struct PendingCheckout: Codable {
-    let productId: String
-    let sessionId: String
-    let timestamp: Date
-
-    var isExpired: Bool {
-        Date().timeIntervalSince(timestamp) > 24 * 60 * 60 // Stripe sessions expire after max 24h
-    }
-
-    private static let key = "helium_pending_stripe_checkout"
-
-    static func save(_ checkout: PendingCheckout) {
-        guard let data = try? JSONEncoder().encode(checkout) else { return }
-        UserDefaults.standard.set(data, forKey: key)
-    }
-
-    static func load() -> PendingCheckout? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(PendingCheckout.self, from: data)
-    }
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: key)
-    }
-}
 
 // MARK: - Payment Provider Protocol
 
@@ -82,12 +26,6 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse
 }
 
-public struct PaymentSuccessResponse: Sendable {
-    let productId: String
-    let expiresAt: Date?
-    let transactionId: String?
-}
-
 // MARK: - Default Implementations
 
 extension StripeOneTapPaymentProvider {
@@ -109,17 +47,12 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private let countryCode: String
     private let currencyCode: String
     private let entitlementsSource: StripeEntitlementsSource?
-    private let checkoutStyle: StripeCheckoutStyle?
-    private let checkoutSuccessURL: String?
-    private let checkoutCancelURL: String?
 
     private var currentProductId: String?
     private var currentClientSecret: String?
     private var currentPaymentMethodId: String?
-    private var currentSessionId: String?
     private var purchaseContinuation: CheckedContinuation<HeliumPaywallTransactionStatus, Never>?
     private var latestTransactionResult: HeliumTransactionIdResult?
-    private var foregroundObserver: NSObjectProtocol?
 
     public init(
         backupDelegate: HeliumPaywallDelegate,
@@ -147,9 +80,6 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
     deinit {
         purchaseContinuation?.resume(returning: .cancelled)
-        if let foregroundObserver {
-            NotificationCenter.default.removeObserver(foregroundObserver)
-        }
     }
 
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
@@ -170,7 +100,6 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
     /// Runs the entire Apple Pay flow on the main actor so that
     /// STPApplePayContext and PKPaymentRequest never cross isolation boundaries.
-    /// Returns nil if STPApplePayContext could not be created.
     @MainActor
     private func presentApplePayFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus {
         let paymentRequest = StripeAPI.paymentRequest(
@@ -194,230 +123,6 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
             self.purchaseContinuation = continuation
             applePayContext.presentApplePay()
         }
-    }
-
-    /// Opens Stripe Hosted Checkout using the configured checkout style.
-    @MainActor
-    private func presentStripeCheckoutFlow(for productId: String) async -> sending HeliumPaywallTransactionStatus {
-        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
-            return .failed(StripeOneTapError.noStripePaymentProvider)
-        }
-
-        let style = checkoutStyle ?? .webView
-        let successURL = checkoutSuccessURL ?? StripeCheckoutRedirect.successURL
-        let cancelURL = checkoutCancelURL ?? StripeCheckoutRedirect.cancelURL
-
-        let checkoutURL: URL
-        let sessionId: String
-        do {
-            let result = try await provider.createCheckoutSession(
-                productPriceId: productId,
-                successURL: successURL,
-                cancelURL: cancelURL
-            )
-            checkoutURL = result.checkoutURL
-            sessionId = result.sessionId
-        } catch {
-            return .failed(error)
-        }
-
-        currentSessionId = sessionId
-
-        switch style {
-        case .webView:
-            return await presentWebViewCheckout(checkoutURL: checkoutURL)
-        case .safariInApp:
-            PendingCheckout.save(PendingCheckout(productId: productId, sessionId: sessionId, timestamp: Date()))
-            return await presentSafariCheckout(checkoutURL: checkoutURL)
-        case .externalBrowser:
-            PendingCheckout.save(PendingCheckout(productId: productId, sessionId: sessionId, timestamp: Date()))
-            return await presentExternalBrowserCheckout(checkoutURL: checkoutURL)
-        }
-    }
-
-    @MainActor
-    private func presentWebViewCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
-        guard let topVC = Self.topViewController() else {
-            return .failed(StripeOneTapError.checkoutWebViewFailed)
-        }
-
-        return await withCheckedContinuation { continuation in
-            self.purchaseContinuation = continuation
-            let checkoutVC = StripeCheckoutViewController(checkoutURL: checkoutURL) { [weak self] result in
-                guard let self else { return }
-                completeCheckout(result: result)
-            }
-            topVC.present(checkoutVC, animated: true)
-        }
-    }
-
-    @MainActor
-    private func presentSafariCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
-        guard let topVC = Self.topViewController() else {
-            return .failed(StripeOneTapError.checkoutWebViewFailed)
-        }
-
-        let safariVC = SFSafariViewController(url: checkoutURL)
-        safariVC.delegate = self
-
-        return await withCheckedContinuation { continuation in
-            self.purchaseContinuation = continuation
-            startForegroundObserver()
-            topVC.present(safariVC, animated: true)
-        }
-    }
-
-    @MainActor
-    private func presentExternalBrowserCheckout(checkoutURL: URL) async -> sending HeliumPaywallTransactionStatus {
-        await UIApplication.shared.open(checkoutURL)
-
-        return await withCheckedContinuation { continuation in
-            self.purchaseContinuation = continuation
-            startForegroundObserver()
-        }
-    }
-
-    // MARK: - Foreground Observer
-
-    private func startForegroundObserver() {
-        stopForegroundObserver()
-        foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.onReturnedToForeground()
-        }
-    }
-
-    private func stopForegroundObserver() {
-        if let foregroundObserver {
-            NotificationCenter.default.removeObserver(foregroundObserver)
-        }
-        foregroundObserver = nil
-    }
-
-    private func onReturnedToForeground() {
-        guard let sessionId = currentSessionId, purchaseContinuation != nil else { return }
-        stopForegroundObserver()
-
-        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
-            resumePurchase(with: .failed(StripeOneTapError.noStripePaymentProvider))
-            return
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let confirmation = try await provider.confirmCheckoutSession(sessionId: sessionId)
-                PendingCheckout.clear()
-                // Dismiss SFSafariViewController if present
-                await MainActor.run {
-                    if let topVC = Self.topViewController(), topVC is SFSafariViewController {
-                        topVC.dismiss(animated: true)
-                    }
-                }
-                let txnId = confirmation.transactionId ?? sessionId
-                let productId = currentProductId ?? confirmation.productId
-                latestTransactionResult = HeliumTransactionIdResult(
-                    productId: productId,
-                    transactionId: txnId,
-                    originalTransactionId: txnId
-                )
-                entitlementsSource?.didCompletePurchase(
-                    heliumProductId: productId,
-                    subscriptionExpiresAt: confirmation.expiresAt
-                )
-                resumePurchase(with: .purchased)
-            } catch HeliumStripeAPIError.checkoutSessionNotCompleted {
-                // Session not completed — user came back without paying
-                PendingCheckout.clear()
-                resumePurchase(with: .cancelled)
-            } catch {
-                // Network/server error — don't clear pending state, keep it for retry
-                resumePurchase(with: .failed(error))
-            }
-        }
-    }
-
-    // MARK: - Pending Checkout Recovery (app terminated)
-
-    private func resolvePendingCheckoutIfNeeded() {
-        guard let pending = PendingCheckout.load() else { return }
-        PendingCheckout.clear()
-
-        guard !pending.isExpired else { return }
-        guard let provider = paymentProvider as? HeliumStripePaymentProvider else { return }
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let confirmation = try await provider.confirmCheckoutSession(sessionId: pending.sessionId)
-                let txnId = confirmation.transactionId ?? pending.sessionId
-                let productId = confirmation.productId.isEmpty ? pending.productId : confirmation.productId
-                latestTransactionResult = HeliumTransactionIdResult(
-                    productId: productId,
-                    transactionId: txnId,
-                    originalTransactionId: txnId
-                )
-                entitlementsSource?.didCompletePurchase(
-                    heliumProductId: pending.productId,
-                    subscriptionExpiresAt: confirmation.expiresAt
-                )
-            } catch {
-                // Session wasn't completed — nothing to recover
-            }
-        }
-    }
-
-    // MARK: - Checkout Completion
-
-    private func completeCheckout(result: StripeCheckoutResult) {
-        guard let productId = currentProductId else { return }
-        let sessionId = currentSessionId ?? ""
-
-        switch result {
-        case .success(let returnedSessionId):
-            let resolvedSessionId = returnedSessionId ?? sessionId
-            guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
-                resumePurchase(with: .failed(StripeOneTapError.noStripePaymentProvider))
-                return
-            }
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    let confirmation = try await provider.confirmCheckoutSession(sessionId: resolvedSessionId)
-                    let txnId = confirmation.transactionId ?? resolvedSessionId
-                    latestTransactionResult = HeliumTransactionIdResult(
-                        productId: confirmation.productId.isEmpty ? productId : confirmation.productId,
-                        transactionId: txnId,
-                        originalTransactionId: txnId
-                    )
-                    entitlementsSource?.didCompletePurchase(
-                        heliumProductId: productId,
-                        subscriptionExpiresAt: confirmation.expiresAt
-                    )
-                    resumePurchase(with: .purchased)
-                } catch {
-                    resumePurchase(with: .failed(error))
-                }
-            }
-        case .cancelled:
-            resumePurchase(with: .cancelled)
-        case .failed(let error):
-            resumePurchase(with: .failed(error))
-        }
-    }
-
-    @MainActor
-    private static func topViewController() -> UIViewController? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }?
-            .rootViewController?
-            .topMostViewController()
     }
 
     open func restorePurchases() async -> Bool {

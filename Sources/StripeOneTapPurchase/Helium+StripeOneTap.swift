@@ -49,7 +49,7 @@ extension Helium {
         StripeAPI.defaultPublishableKey = stripePublishableKey
         
         let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, merchantName: merchantName, managementURL: managementURL)
-        let entitlementsSource = StripeEntitlementsSource(apiKey: apiKey)
+        let entitlementsSource = StripeEntitlementsSource()
         let stripeDelegate = StripeOneTapPurchaseDelegate(
             backupDelegate: backupPurchaseDelegate,
             paymentProvider: provider,
@@ -63,77 +63,13 @@ extension Helium {
         )
         Helium.config.purchaseDelegate = stripeDelegate
         Helium.config.thirdPartyEntitlementsSource = entitlementsSource
-        
+
         ApplePayHelper.shared.setStripeApplePayAvailable(StripeAPI.deviceSupportsApplePay())
-        
+
         initialize(apiKey: apiKey)
     }
-    
-    /// If your custom user ID can change AFTER Helium is initialized, make sure to call this
-    /// instead of setting `Helium.identify.userId` directly.
-    public func setUserIdAndSyncStripeIfNeeded(userId: String) {
-        let previousUserId = Helium.identify.userId
-        Helium.identify.userId = userId
-        
-        guard userId != previousUserId else {
-            return
-        }
-        guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else {
-            return
-        }
-        guard Helium.shared.getDownloadStatus() != .notDownloadedYet else {
-            return
-        }
-        
-        Task {
-            if HeliumIdentityManager.shared.getStripeCustomerId() == nil {
-                // See if entitlements are changed for new user ID
-                await delegate.refreshEntitlements()
-                return
-            }
-            await delegate.syncCustomerMetadata()
-        }
-    }
-    
-    /// If you app can potentially support multiple Stripe users on the same device, you'll want to call this to effectively "log out" a Stripe user.
-    public func resetStripeEntitlements(clearUserId: Bool) {
-        if clearUserId {
-            Helium.identify.userId = nil
-        }
-        (Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource)?.clearEntitlements()
-        HeliumIdentityManager.shared.setStripeCustomerId(nil)
-    }
-    
-    /// Creates a Stripe Customer Portal session and returns the portal URL.
-    /// The host app can open this URL in a browser or in-app webview to let
-    /// the user manage their subscriptions, payment methods, and invoices.
-    ///
-    /// - Parameter returnUrl: The URL Stripe redirects to after the user finishes in the portal.
-    /// - Returns: The portal session URL.
-    ///
-    /// ## Example
-    /// ```swift
-    /// do {
-    ///     let portalURL = try await Helium.shared.createStripePortalSession(returnUrl: "myapp://settings")
-    ///     await UIApplication.shared.open(portalURL)
-    /// } catch {
-    ///     print("Failed to create portal session: \(error)")
-    /// }
-    /// ```
-    public func createStripePortalSession(returnUrl: String) async throws -> URL {
-        guard let delegate = Helium.config.purchaseDelegate as? StripeOneTapPurchaseDelegate else {
-            throw StripeOneTapError.stripeOneTapNotInitialized
-        }
-        return try await delegate.createPortalSession(returnUrl: returnUrl)
-    }
-    
-    /// Returns `true` if the user has any active Stripe entitlement (e.g. an active subscription).
-    public func hasActiveStripeEntitlement() async -> Bool {
-        guard let source = Helium.config.thirdPartyEntitlementsSource as? StripeEntitlementsSource else {
-            return false
-        }
-        let productIds = await source.entitledProductIds()
-        return !productIds.isEmpty
-    }
-    
+
+    // Note: Stripe sync now happens automatically when Helium.identify.userId is set.
+    // resetStripeEntitlements, createStripePortalSession, and hasActiveStripeEntitlement
+    // are provided by the core Helium SDK directly on Helium.shared.
 }
