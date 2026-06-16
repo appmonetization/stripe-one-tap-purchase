@@ -27,7 +27,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         request.requiredShippingContactFields = [.name, .emailAddress]
         request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
 
-        guard let priceMap = HeliumFetchedConfigManager.shared.getServerProductsPriceMap(),
+        guard let priceMap = HeliumFetchedConfigManager.shared.getStripeProductsPriceMap(),
               let product = priceMap[productId] else {
             // No product data available — show a pending total so the sheet can still appear
             request.paymentSummaryItems = [
@@ -143,7 +143,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
         let billing = paymentInformation.billingContact
         let shipping = paymentInformation.shippingContact
 
-        var body = HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
+        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
         body["customerInfo"] = [
             "paymentMethodId": paymentMethod.id,
             "name": formatName(from: shipping?.name ?? billing?.name),
@@ -159,7 +159,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
         let response: SetupIntentResponse = try await HeliumStripeAPIClient.shared.post("stripe/create-intent", body: body)
         guard let clientSecret = response.clientSecret else {
-            throw HeliumStripeAPIError.serverError(statusCode: 200, message: "No client secret returned from the server.")
+            throw HeliumPaymentAPIError.serverError(statusCode: 200, message: "No client secret returned from the server.")
         }
         if let stripeCustomerId = response.stripeCustomerId {
             HeliumIdentityManager.shared.setStripeCustomerId(stripeCustomerId)
@@ -172,11 +172,11 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
     public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
-        var body = HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
+        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
         body["paymentMethodId"] = paymentMethodId
 
         let response: ExecutePurchaseResponse = try await HeliumStripeAPIClient.shared.post("stripe/execute-purchase", body: body)
-        return response.toPaymentSuccessResponse(fallbackProductId: productId)
+        return response.toPaymentSuccessResponse(backupProductId: productId)
     }
 
 

@@ -13,7 +13,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/cloudcaptainai/helium-swift", from: "4.1.7"),
+        .package(url: "https://github.com/cloudcaptainai/helium-swift", from: "4.5.1"),
         .package(url: "https://github.com/stripe/stripe-ios-spm", from: "25.6.2"),
     ],
     targets: [

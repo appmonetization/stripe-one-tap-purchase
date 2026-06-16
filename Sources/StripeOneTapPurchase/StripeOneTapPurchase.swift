@@ -46,7 +46,6 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private let merchantIdentifier: String
     private let countryCode: String
     private let currencyCode: String
-    private let entitlementsSource: StripeEntitlementsSource?
 
     private var currentProductId: String?
     private var currentClientSecret: String?
@@ -59,23 +58,14 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         paymentProvider: StripeOneTapPaymentProvider,
         merchantIdentifier: String,
         countryCode: String = "US",
-        currencyCode: String = "USD",
-        entitlementsSource: StripeEntitlementsSource?,
-        checkoutStyle: StripeCheckoutStyle? = nil,
-        checkoutSuccessURL: String? = nil,
-        checkoutCancelURL: String? = nil
+        currencyCode: String = "USD"
     ) {
         self.backupDelegate = backupDelegate
         self.paymentProvider = paymentProvider
         self.merchantIdentifier = merchantIdentifier
         self.countryCode = countryCode
         self.currencyCode = currencyCode
-        self.entitlementsSource = entitlementsSource
-        self.checkoutStyle = checkoutStyle
-        self.checkoutSuccessURL = checkoutSuccessURL
-        self.checkoutCancelURL = checkoutCancelURL
         super.init()
-        resolvePendingCheckoutIfNeeded()
     }
 
     deinit {
@@ -83,7 +73,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
-        let allStripeProductIds = Array((HeliumFetchedConfigManager.shared.getServerProductsPriceMap() ?? [:]).keys)
+        let allStripeProductIds = Array((HeliumFetchedConfigManager.shared.getStripeProductsPriceMap() ?? [:]).keys)
         if !allStripeProductIds.contains(productId) {
             return await backupDelegate.makePurchase(productId: productId)
         }
@@ -91,11 +81,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         currentProductId = productId
         currentClientSecret = nil
 
-        if checkoutStyle == nil && StripeAPI.deviceSupportsApplePay() {
-            return await presentApplePayFlow(for: productId)
-        } else {
-            return await presentStripeCheckoutFlow(for: productId)
-        }
+        return await presentApplePayFlow(for: productId)
     }
 
     /// Runs the entire Apple Pay flow on the main actor so that
@@ -126,33 +112,11 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     open func restorePurchases() async -> Bool {
-        // Refresh both StoreKit (via backup delegate) and Stripe entitlements in parallel
-        async let stripeRefresh: Void = entitlementsSource?.refreshEntitlements() ?? ()
-        async let backupRestore: Bool = backupDelegate.restorePurchases()
-        _ = await backupRestore
-        await stripeRefresh
-        // hasAny() checks both StoreKit and third-party source
-        return await Helium.entitlements.hasAny()
+        return await backupDelegate.restorePurchases()
     }
 
     open func getLatestCompletedTransactionIdResult() -> HeliumTransactionIdResult? {
         return latestTransactionResult
-    }
-    
-    func syncCustomerMetadata() async {
-        guard let provider = paymentProvider as? HeliumStripePaymentProvider else { return }
-        let _ = try? await provider.updateCustomerMetadata()
-    }
-    
-    func refreshEntitlements() async {
-        await entitlementsSource?.refreshEntitlements()
-    }
-
-    func createPortalSession(returnUrl: String) async throws -> URL {
-        guard let provider = paymentProvider as? HeliumStripePaymentProvider else {
-            throw StripeOneTapError.noStripePaymentProvider
-        }
-        return try await provider.createPortalSession(returnUrl: returnUrl)
     }
 
     private func isPaymentIntentSecret(_ clientSecret: String) -> Bool {
@@ -166,13 +130,11 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     private func resumePurchase(with status: sending HeliumPaywallTransactionStatus) {
-        stopForegroundObserver()
         purchaseContinuation?.resume(returning: status)
         purchaseContinuation = nil
         currentProductId = nil
         currentClientSecret = nil
         currentPaymentMethodId = nil
-        currentSessionId = nil
     }
     
     public func onPaywallEvent(_ event: any HeliumEvent) {
@@ -228,7 +190,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             // Setup intent flow: need to create subscription/charge
                             let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethodId: paymentMethodId ?? "")
                             transactionId = paymentSuccessResponse.transactionId
-                            entitlementsSource?.didCompletePurchase(heliumProductId: productId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
+                            StripeCheckoutManager.shared.handleNewPurchase(productId: productId, priceId: paymentSuccessResponse.priceId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
                         if let transactionId {
                             latestTransactionResult = HeliumTransactionIdResult(
@@ -256,16 +218,6 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
     }
 }
 
-// MARK: - SFSafariViewControllerDelegate
-
-extension StripeOneTapPurchaseDelegate: SFSafariViewControllerDelegate {
-    public func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
-        // User tapped "Done" — they may have completed payment first.
-        // Check with the server before deciding.
-        onReturnedToForeground()
-    }
-}
-
 // MARK: - Error
 
 enum StripeOneTapError: LocalizedError {
@@ -275,8 +227,6 @@ enum StripeOneTapError: LocalizedError {
     case stripeApplePayContextError
     case noStripePaymentProvider
     case stripeOneTapNotInitialized
-    case checkoutSessionCreationFailed
-    case checkoutWebViewFailed
 
     var errorDescription: String? {
         switch self {
@@ -292,27 +242,6 @@ enum StripeOneTapError: LocalizedError {
             return "Portal session requires HeliumStripePaymentProvider"
         case .stripeOneTapNotInitialized:
             return "Call initializeWithStripeOneTap() before using this method"
-        case .checkoutSessionCreationFailed:
-            return "Failed to create Stripe Checkout session"
-        case .checkoutWebViewFailed:
-            return "Could not present the checkout web view"
         }
-    }
-}
-
-// MARK: - UIViewController Helper
-
-private extension UIViewController {
-    func topMostViewController() -> UIViewController {
-        if let presented = presentedViewController {
-            return presented.topMostViewController()
-        }
-        if let nav = self as? UINavigationController, let visible = nav.visibleViewController {
-            return visible.topMostViewController()
-        }
-        if let tab = self as? UITabBarController, let selected = tab.selectedViewController {
-            return selected.topMostViewController()
-        }
-        return self
     }
 }
