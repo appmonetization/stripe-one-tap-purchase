@@ -11,12 +11,10 @@ private enum OfferPaymentMode {
 
 public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
-    private let apiKey: String
     private let merchantName: String
     private let managementURL: URL
 
-    public init(apiKey: String, merchantName: String, managementURL: URL) {
-        self.apiKey = apiKey
+    public init(merchantName: String, managementURL: URL) {
         self.merchantName = merchantName
         self.managementURL = managementURL
     }

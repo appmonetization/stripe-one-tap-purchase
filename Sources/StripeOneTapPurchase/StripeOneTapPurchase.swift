@@ -31,8 +31,6 @@ public protocol StripeOneTapPaymentProvider: Sendable {
 extension StripeOneTapPaymentProvider {
 
     public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
-
-    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse? { nil }
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -223,10 +221,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 enum StripeOneTapError: LocalizedError {
     case noProductId
     case unknownError
-    case stripeApplePayNotAvailable
     case stripeApplePayContextError
-    case noStripePaymentProvider
-    case stripeOneTapNotInitialized
 
     var errorDescription: String? {
         switch self {
@@ -234,14 +229,8 @@ enum StripeOneTapError: LocalizedError {
             return "No product ID set for the current purchase"
         case .unknownError:
             return "An unknown Apple Pay error occurred"
-        case .stripeApplePayNotAvailable:
-            return "Stripe Apple Pay not available on this device"
         case .stripeApplePayContextError:
             return "Could not create Stripe Apple Pay context"
-        case .noStripePaymentProvider:
-            return "Portal session requires HeliumStripePaymentProvider"
-        case .stripeOneTapNotInitialized:
-            return "Call initializeWithStripeOneTap() before using this method"
         }
     }
 }

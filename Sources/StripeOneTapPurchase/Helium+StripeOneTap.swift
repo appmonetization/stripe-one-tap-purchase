@@ -4,10 +4,7 @@ import Helium
 
 extension Helium {
     
-    /// Creates a `StripeOneTapPurchaseDelegate`, sets it as the purchase delegate,
-    /// adds the Apple Pay user trait, and initializes Helium.
-    ///
-    /// This is the all-in-one setup for Stripe Apple Pay with Helium.
+    /// Configure in-app Stripe Apple Pay with Helium and (soon) Stripe external browser flow..
     ///
     /// - Parameters:
     ///   - apiKey: Your Helium API key.
@@ -21,7 +18,7 @@ extension Helium {
     ///     a recurring payment disclosure with a link to this URL.
     ///     Only used when `paymentProvider` is `nil`.
     ///   - paymentProvider: Custom payment provider. When `nil`, a default ``HeliumStripePaymentProvider``
-    ///     is created using `apiKey` and `managementURL`.
+    ///     is created.
     ///   - countryCode: Two-letter ISO country code for the merchant. Defaults to `"US"`.
     ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.   
     public func initializeWithStripeOneTap(
@@ -41,7 +38,7 @@ extension Helium {
         
         Helium.config.enableExternalWebCheckout(successURL: checkoutSuccessURL, cancelURL: checkoutCancelURL, paymentProcessors: .stripe)
         
-        let provider = paymentProvider ?? HeliumStripePaymentProvider(apiKey: apiKey, merchantName: merchantName, managementURL: managementURL)
+        let provider = paymentProvider ?? HeliumStripePaymentProvider(merchantName: merchantName, managementURL: managementURL)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
             backupDelegate: backupPurchaseDelegate,
             paymentProvider: provider,
