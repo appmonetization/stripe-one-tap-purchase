@@ -4,7 +4,7 @@ import Helium
 
 extension Helium {
     
-    /// Configure in-app Stripe Apple Pay with Helium and (soon) Stripe external browser flow..
+    /// Configure in-app Stripe Apple Pay with Helium and (soon) Stripe external browser flow.
     ///
     /// - Parameters:
     ///   - apiKey: Your Helium API key.
@@ -19,8 +19,10 @@ extension Helium {
     ///     Only used when `paymentProvider` is `nil`.
     ///   - paymentProvider: Custom payment provider. When `nil`, a default ``HeliumStripePaymentProvider``
     ///     is created.
+    ///   - checkoutSuccessURL: (External browser flow only) URL to redirect to after a successful payment.
+    ///   - checkoutCancelURL: (External browser flow only) URL the provider redirects to when the user cancels checkout.
     ///   - countryCode: Two-letter ISO country code for the merchant. Defaults to `"US"`.
-    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.   
+    ///   - currencyCode: Three-letter ISO currency code. Defaults to `"USD"`.
     public func initializeWithStripeOneTap(
         apiKey: String,
         stripePublishableKey: String,
@@ -29,14 +31,18 @@ extension Helium {
         merchantName: String,
         managementURL: URL,
         paymentProvider: StripeOneTapPaymentProvider? = nil,
-        checkoutSuccessURL: String,
-        checkoutCancelURL: String,
+        checkoutSuccessURL: String? = nil,
+        checkoutCancelURL: String? = nil,
         countryCode: String = "US",
         currencyCode: String = "USD"
     ) {
         StripeAPI.defaultPublishableKey = stripePublishableKey
         
-        Helium.config.enableExternalWebCheckout(successURL: checkoutSuccessURL, cancelURL: checkoutCancelURL, paymentProcessors: .stripe)
+        Helium.config.enableExternalWebCheckout(
+            successURL: checkoutSuccessURL ?? "externalnotsupportedyet://openapp",
+            cancelURL: checkoutCancelURL ?? "externalnotsupportedyet://openapp",
+            paymentProcessors: .stripe
+        )
         
         let provider = paymentProvider ?? HeliumStripePaymentProvider(merchantName: merchantName, managementURL: managementURL)
         let stripeDelegate = StripeOneTapPurchaseDelegate(
