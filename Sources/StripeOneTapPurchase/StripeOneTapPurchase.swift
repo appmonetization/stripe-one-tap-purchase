@@ -73,8 +73,8 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     }
 
     open func makePurchase(productId: String) async -> HeliumPaywallTransactionStatus {
-        let allStripeProductIds = Array((HeliumFetchedConfigManager.shared.getStripeProductsPriceMap() ?? [:]).keys)
-        if !allStripeProductIds.contains(productId) {
+        let isStripeProduct = HeliumFetchedConfigManager.shared.getStripeProductsPriceMap()?[productId] != nil
+        if !isStripeProduct {
             return await backupDelegate.makePurchase(productId: productId)
         }
 
