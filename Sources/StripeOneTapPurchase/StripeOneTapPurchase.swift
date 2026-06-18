@@ -23,7 +23,7 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
     /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse
+    @MainActor func didCompletePayment(for productId: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations
@@ -47,7 +47,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
     private var currentProductId: String?
     private var currentClientSecret: String?
-    private var currentPaymentMethodId: String?
+    private var currentPaymentMethod: StripeAPI.PaymentMethod?
     private var purchaseContinuation: CheckedContinuation<HeliumPaywallTransactionStatus, Never>?
     private var latestTransactionResult: HeliumTransactionIdResult?
 
@@ -132,7 +132,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         purchaseContinuation = nil
         currentProductId = nil
         currentClientSecret = nil
-        currentPaymentMethodId = nil
+        currentPaymentMethod = nil
     }
     
     public func onPaywallEvent(_ event: any HeliumEvent) {
@@ -145,6 +145,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
 
 extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 
+    @MainActor
     public func applePayContext(
         _ context: STPApplePayContext,
         didCreatePaymentMethod paymentMethod: StripeAPI.PaymentMethod,
@@ -154,7 +155,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
             throw StripeOneTapError.noProductId
         }
 
-        currentPaymentMethodId = paymentMethod.id
+        currentPaymentMethod = paymentMethod
 
         let clientSecret = try await paymentProvider.fetchClientSecret(
             for: productId,
@@ -165,6 +166,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
         return clientSecret
     }
 
+    @MainActor
     public func applePayContext(
         _ context: STPApplePayContext,
         didCompleteWith status: STPApplePayContext.PaymentStatus,
@@ -174,7 +176,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
         case .success:
             let productId = currentProductId
             let clientSecret = currentClientSecret
-            let paymentMethodId = currentPaymentMethodId
+            let paymentMethod = currentPaymentMethod
             let provider = paymentProvider
             Task { [weak self] in
                 guard let self else { return }
@@ -186,7 +188,10 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             transactionId = extractIntentId(from: clientSecret)
                         } else {
                             // Setup intent flow: need to create subscription/charge
-                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethodId: paymentMethodId ?? "")
+                            guard let paymentMethod else {
+                                throw StripeOneTapError.noPaymentMethod
+                            }
+                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethod: paymentMethod)
                             transactionId = paymentSuccessResponse.transactionId
                             StripeCheckoutManager.shared.handleNewPurchase(productId: productId, priceId: paymentSuccessResponse.priceId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
@@ -220,6 +225,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 
 enum StripeOneTapError: LocalizedError {
     case noProductId
+    case noPaymentMethod
     case unknownError
     case stripeApplePayContextError
 
@@ -227,6 +233,8 @@ enum StripeOneTapError: LocalizedError {
         switch self {
         case .noProductId:
             return "No product ID set for the current purchase"
+        case .noPaymentMethod:
+            return "No payment method available for the current purchase"
         case .unknownError:
             return "An unknown Apple Pay error occurred"
         case .stripeApplePayContextError:
