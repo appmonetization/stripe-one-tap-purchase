@@ -9,7 +9,7 @@ private enum OfferPaymentMode {
     static let payUpFront = "PayUpFront"
 }
 
-public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
+open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked Sendable {
 
     private let merchantName: String
     private let managementURL: URL
@@ -21,7 +21,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     // MARK: - configurePaymentRequest
 
-    public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
+    open func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
         request.requiredShippingContactFields = [.name, .emailAddress]
         request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
 
@@ -133,7 +133,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
     /// Creates a Stripe Customer (or finds existing), attaches the payment method,
     /// and creates a SetupIntent for card authorization.
     @MainActor
-    public func fetchClientSecret(
+    open func fetchClientSecret(
         for productId: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
@@ -169,7 +169,7 @@ public struct HeliumStripePaymentProvider: StripeOneTapPaymentProvider {
 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
-    public func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
+    open func didCompletePayment(for productId: String, paymentMethodId: String) async throws -> PaymentSuccessResponse {
         var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
         body["paymentMethodId"] = paymentMethodId
 
