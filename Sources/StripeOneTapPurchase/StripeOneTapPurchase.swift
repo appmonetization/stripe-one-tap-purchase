@@ -20,10 +20,10 @@ public protocol StripeOneTapPaymentProvider: Sendable {
         paymentInformation: PKPayment
     ) async throws -> String
 
-    /// Called after successful payment confirmation, before reporting `.purchased` to Helium.
-    /// Use this for post-payment work like creating a subscription after a SetupIntent confirms.
+    /// Called after the payment method is confirmed, before reporting purchase status to Helium.
+    /// Typically where Stripe subscription is created.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    @MainActor func didCompletePayment(for productId: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
+    @MainActor func finalizePurchase(for productId: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations
@@ -184,14 +184,14 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                     if let productId {
                         let transactionId: String?
                         if let clientSecret, isPaymentIntentSecret(clientSecret) == true {
-                            // Payment intent flow: payment already confirmed, skip didCompletePayment
+                            // Payment intent flow: payment already confirmed, skip finalizePurchase
                             transactionId = extractIntentId(from: clientSecret)
                         } else {
                             // Setup intent flow: need to create subscription/charge
                             guard let paymentMethod else {
                                 throw StripeOneTapError.noPaymentMethod
                             }
-                            let paymentSuccessResponse = try await provider.didCompletePayment(for: productId, paymentMethod: paymentMethod)
+                            let paymentSuccessResponse = try await provider.finalizePurchase(for: productId, paymentMethod: paymentMethod)
                             transactionId = paymentSuccessResponse.transactionId
                             StripeCheckoutManager.shared.handleNewPurchase(productId: productId, priceId: paymentSuccessResponse.priceId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
