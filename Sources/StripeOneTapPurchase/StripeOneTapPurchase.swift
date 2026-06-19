@@ -10,12 +10,12 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Configure the payment request before presenting Apple Pay.
     /// Set payment summary items, recurring payment info, required contact fields, etc.
     /// Called with a base request that already has merchantIdentifier, country, and currency set.
-    func configurePaymentRequest(_ request: PKPaymentRequest, for productKey: String)
+    func configurePaymentRequest(_ request: PKPaymentRequest, for heliumProductKey: String)
 
     /// Called after the customer authorizes Apple Pay. Create a PaymentIntent or SetupIntent
     /// on your server and return the client secret.
     @MainActor func fetchClientSecret(
-        for productKey: String,
+        for heliumProductKey: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
     ) async throws -> String
@@ -23,14 +23,14 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after the payment method is confirmed, before reporting purchase status to Helium.
     /// Typically where Stripe subscription is created.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    @MainActor func finalizePurchase(for productKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
+    @MainActor func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations
 
 extension StripeOneTapPaymentProvider {
 
-    public func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {}
+    public func configurePaymentRequest(_ request: PKPaymentRequest, for heliumProductKey: String) {}
 }
 
 // MARK: - StripeOneTapPurchaseDelegate
@@ -223,13 +223,14 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 
 // MARK: - Error
 
-enum StripeOneTapError: LocalizedError {
+public enum StripeOneTapError: LocalizedError {
     case noProductId
     case noPaymentMethod
     case unknownError
     case stripeApplePayContextError
+    case invalidProductKey(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .noProductId:
             return "No product ID set for the current purchase"
@@ -239,6 +240,8 @@ enum StripeOneTapError: LocalizedError {
             return "An unknown Apple Pay error occurred"
         case .stripeApplePayContextError:
             return "Could not create Stripe Apple Pay context"
+        case .invalidProductKey(let key):
+            return "Could not deconstruct Stripe product and price IDs from product key '\(key)'"
         }
     }
 }
