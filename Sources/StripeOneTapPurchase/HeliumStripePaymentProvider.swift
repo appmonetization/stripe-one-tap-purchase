@@ -134,14 +134,14 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
     /// and creates a SetupIntent for card authorization.
     @MainActor
     open func fetchClientSecret(
-        for productId: String,
+        for heliumProductKey: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
     ) async throws -> String {
         let billing = paymentInformation.billingContact
         let shipping = paymentInformation.shippingContact
 
-        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
+        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
         body["customerInfo"] = [
             "paymentMethodId": paymentMethod.id,
             "name": formatName(from: shipping?.name ?? billing?.name),
@@ -170,12 +170,12 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
     @MainActor
-    open func finalizePurchase(for productId: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse {
-        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: productId)
+    open func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse {
+        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
         body["paymentMethodId"] = paymentMethod.id
 
         let response: ExecutePurchaseResponse = try await HeliumStripeAPIClient.shared.post("stripe/execute-purchase", body: body)
-        return response.toPaymentSuccessResponse(backupProductId: productId)
+        return response.toPaymentSuccessResponse(backupProductId: heliumProductKey)
     }
 
 
