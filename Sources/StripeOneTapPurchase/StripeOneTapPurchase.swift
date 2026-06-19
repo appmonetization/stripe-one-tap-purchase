@@ -10,12 +10,12 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Configure the payment request before presenting Apple Pay.
     /// Set payment summary items, recurring payment info, required contact fields, etc.
     /// Called with a base request that already has merchantIdentifier, country, and currency set.
-    func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String)
+    func configurePaymentRequest(_ request: PKPaymentRequest, for productKey: String)
 
     /// Called after the customer authorizes Apple Pay. Create a PaymentIntent or SetupIntent
     /// on your server and return the client secret.
     @MainActor func fetchClientSecret(
-        for productId: String,
+        for productKey: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
     ) async throws -> String
@@ -23,7 +23,7 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after the payment method is confirmed, before reporting purchase status to Helium.
     /// Typically where Stripe subscription is created.
     /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    @MainActor func finalizePurchase(for productId: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
+    @MainActor func finalizePurchase(for productKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations

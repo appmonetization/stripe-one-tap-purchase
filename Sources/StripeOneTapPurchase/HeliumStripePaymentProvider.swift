@@ -21,12 +21,12 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
 
     // MARK: - configurePaymentRequest
 
-    open func configurePaymentRequest(_ request: PKPaymentRequest, for productId: String) {
+    open func configurePaymentRequest(_ request: PKPaymentRequest, for productKey: String) {
         request.requiredShippingContactFields = [.name, .emailAddress]
         request.requiredBillingContactFields = [.name, .emailAddress, .postalAddress]
 
         guard let priceMap = HeliumFetchedConfigManager.shared.getStripeProductsPriceMap(),
-              let product = priceMap[productId] else {
+              let product = priceMap[productKey] else {
             // No product data available — show a pending total so the sheet can still appear
             request.paymentSummaryItems = [
                 PKPaymentSummaryItem(label: "Total", amount: NSDecimalNumber.zero, type: .pending)
@@ -38,7 +38,7 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
             request.currencyCode = productCurrency
         }
 
-        let label = product.localizedTitle ?? productId
+        let label = product.localizedTitle ?? productKey
         let price = NSDecimalNumber(decimal: product.value ?? 0)
 
         let localizedPrice = product.toLocalizedPrice()
