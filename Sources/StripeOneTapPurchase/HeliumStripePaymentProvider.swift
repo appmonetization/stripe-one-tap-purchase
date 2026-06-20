@@ -9,6 +9,19 @@ private enum OfferPaymentMode {
     static let payUpFront = "PayUpFront"
 }
 
+/// Customer contact details sent to the create-intent endpoint.
+public struct StripeCustomerContact: Sendable {
+    public var name: String?
+    public var email: String?
+    public var phone: String?
+
+    public init(name: String? = nil, email: String? = nil, phone: String? = nil) {
+        self.name = name
+        self.email = email
+        self.phone = phone
+    }
+}
+
 open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked Sendable {
 
     private let merchantName: String
@@ -139,13 +152,12 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
         paymentInformation: PKPayment
     ) async throws -> String {
         let billing = paymentInformation.billingContact
-        let shipping = paymentInformation.shippingContact
+        let contact = stripeCustomerInfo(for: heliumProductKey, paymentInformation: paymentInformation)
 
-        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
-        body["customerInfo"] = [
+        var customerInfo: [String: Any] = [
             "paymentMethodId": paymentMethod.id,
-            "name": formatName(from: shipping?.name ?? billing?.name),
-            "email": shipping?.emailAddress ?? billing?.emailAddress ?? "",
+            "name": contact.name ?? "",
+            "email": contact.email ?? "",
             "billingAddress": [
                 "line1": billing?.postalAddress?.street ?? "",
                 "city": billing?.postalAddress?.city ?? "",
@@ -154,6 +166,12 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
                 "country": billing?.postalAddress?.isoCountryCode ?? ""
             ]
         ]
+        if let phone = contact.phone {
+            customerInfo["phone"] = phone
+        }
+
+        var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
+        body["customerInfo"] = customerInfo
 
         let response: SetupIntentResponse = try await HeliumStripeAPIClient.shared.post("stripe/create-intent", body: body)
         guard let clientSecret = response.clientSecret else {
@@ -163,6 +181,20 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
             HeliumIdentityManager.shared.setStripeCustomerId(stripeCustomerId)
         }
         return clientSecret
+    }
+
+    // MARK: - stripeCustomerInfo
+
+    /// Override to supply customer contact details (e.g. your app's logged-in user).
+    /// Default derives name and email from the Apple Pay contact; phone is nil.
+    @MainActor
+    open func stripeCustomerInfo(for heliumProductKey: String, paymentInformation: PKPayment) -> StripeCustomerContact {
+        let billing = paymentInformation.billingContact
+        let shipping = paymentInformation.shippingContact
+        return StripeCustomerContact(
+            name: formatName(from: shipping?.name ?? billing?.name),
+            email: shipping?.emailAddress ?? billing?.emailAddress
+        )
     }
 
     // MARK: - finalizePurchase
