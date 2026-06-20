@@ -18,12 +18,13 @@ public protocol StripeOneTapPaymentProvider: Sendable {
         for heliumProductKey: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
-    ) async throws -> String
+    ) async throws -> StripeClientSecretResult
 
     /// Called after the payment method is confirmed, before reporting purchase status to Helium.
     /// Typically where Stripe subscription is created.
-    /// Throwing here will report `.failed(error)` instead of `.purchased`.
-    @MainActor func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse
+    /// `metadata` is the Helium identity metadata from create-intent; copy it onto any
+    /// subscription you create. Throwing here will report `.failed(error)` instead of `.purchased`.
+    @MainActor func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String]) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations
@@ -48,6 +49,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
     private var currentProductId: String?
     private var currentClientSecret: String?
     private var currentPaymentMethod: StripeAPI.PaymentMethod?
+    private var currentMetadata: [String: String] = [:]
     private var purchaseContinuation: CheckedContinuation<HeliumPaywallTransactionStatus, Never>?
     private var latestTransactionResult: HeliumTransactionIdResult?
 
@@ -133,6 +135,7 @@ open class StripeOneTapPurchaseDelegate: NSObject, HeliumPaywallDelegate, Helium
         currentProductId = nil
         currentClientSecret = nil
         currentPaymentMethod = nil
+        currentMetadata = [:]
     }
     
     public func onPaywallEvent(_ event: any HeliumEvent) {
@@ -157,13 +160,14 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
 
         currentPaymentMethod = paymentMethod
 
-        let clientSecret = try await paymentProvider.fetchClientSecret(
+        let result = try await paymentProvider.fetchClientSecret(
             for: productId,
             paymentMethod: paymentMethod,
             paymentInformation: paymentInformation
         )
-        currentClientSecret = clientSecret
-        return clientSecret
+        currentClientSecret = result.clientSecret
+        currentMetadata = result.metadata
+        return result.clientSecret
     }
 
     @MainActor
@@ -177,6 +181,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
             let productId = currentProductId
             let clientSecret = currentClientSecret
             let paymentMethod = currentPaymentMethod
+            let metadata = currentMetadata
             let provider = paymentProvider
             Task { [weak self] in
                 guard let self else { return }
@@ -191,7 +196,7 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             guard let paymentMethod else {
                                 throw StripeOneTapError.noPaymentMethod
                             }
-                            let paymentSuccessResponse = try await provider.finalizePurchase(for: productId, paymentMethod: paymentMethod)
+                            let paymentSuccessResponse = try await provider.finalizePurchase(for: productId, paymentMethod: paymentMethod, metadata: metadata)
                             transactionId = paymentSuccessResponse.transactionId
                             StripeCheckoutManager.shared.handleNewPurchase(productId: productId, priceId: paymentSuccessResponse.priceId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }

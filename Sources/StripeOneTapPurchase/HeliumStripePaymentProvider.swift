@@ -22,6 +22,19 @@ public struct StripeCustomerContact: Sendable {
     }
 }
 
+/// The result of preparing a Stripe intent: the client secret plus the Helium
+/// identity metadata stamped on the customer/SetupIntent. Forward `metadata` onto
+/// any Stripe subscription created in `finalizePurchase` so Helium lookups resolve.
+public struct StripeClientSecretResult: Sendable {
+    public let clientSecret: String
+    public let metadata: [String: String]
+
+    public init(clientSecret: String, metadata: [String: String] = [:]) {
+        self.clientSecret = clientSecret
+        self.metadata = metadata
+    }
+}
+
 open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked Sendable {
 
     private let merchantName: String
@@ -150,7 +163,7 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
         for heliumProductKey: String,
         paymentMethod: StripeAPI.PaymentMethod,
         paymentInformation: PKPayment
-    ) async throws -> String {
+    ) async throws -> StripeClientSecretResult {
         let billing = paymentInformation.billingContact
         let contact = stripeCustomerInfo(for: heliumProductKey, paymentInformation: paymentInformation)
 
@@ -180,7 +193,7 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
         if let stripeCustomerId = response.stripeCustomerId {
             HeliumIdentityManager.shared.setStripeCustomerId(stripeCustomerId)
         }
-        return clientSecret
+        return StripeClientSecretResult(clientSecret: clientSecret, metadata: response.metadata ?? [:])
     }
 
     // MARK: - stripeCustomerInfo
@@ -201,8 +214,10 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
+    /// The default ignores `metadata` (the server stamps it); overrides must copy it
+    /// onto the Stripe subscription they create.
     @MainActor
-    open func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod) async throws -> PaymentSuccessResponse {
+    open func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String]) async throws -> PaymentSuccessResponse {
         var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
         body["paymentMethodId"] = paymentMethod.id
 
@@ -224,6 +239,7 @@ private struct SetupIntentResponse: Decodable {
     let clientSecret: String?
     let setupIntentId: String?
     let stripeCustomerId: String?
+    let metadata: [String: String]?
 }
 
 
