@@ -234,6 +234,7 @@ public enum StripeOneTapError: LocalizedError {
     case unknownError
     case stripeApplePayContextError
     case invalidProductKey(String)
+    case missingCustomerIdInFinalizePurchase
 
     public var errorDescription: String? {
         switch self {
@@ -247,6 +248,8 @@ public enum StripeOneTapError: LocalizedError {
             return "Could not create Stripe Apple Pay context"
         case .invalidProductKey(let key):
             return "Could not deconstruct Stripe product and price IDs from product key '\(key)'"
+        case .missingCustomerIdInFinalizePurchase:
+            return "Stripe customer id missing in finalizePurchase."
         }
     }
 }
