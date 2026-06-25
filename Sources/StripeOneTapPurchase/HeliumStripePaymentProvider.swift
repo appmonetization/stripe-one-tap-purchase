@@ -252,7 +252,7 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
         body["paymentMethodId"] = paymentMethod.id
 
         let response: ExecutePurchaseResponse = try await HeliumStripeAPIClient.shared.post("stripe/execute-purchase", body: body)
-        return response.toPaymentSuccessResponse(backupProductId: heliumProductKey)
+        return response.toPaymentSuccessResponse()
     }
 
 
