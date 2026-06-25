@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'StripeOneTapPurchase'
-  s.version          = '1.0.7'
+  s.version          = '2.2.0'
   s.summary          = 'Stripe one-tap purchase integration for Helium.'
   s.description      = 'A library that provides Stripe one-tap purchase functionality with Helium integration, including Apple Pay support and entitlements management.'
   s.homepage         = 'https://github.com/appmonetization/stripe-one-tap-purchase'
@@ -13,6 +13,6 @@ Pod::Spec.new do |s|
 
   s.source_files = 'Sources/StripeOneTapPurchase/**/*.swift'
 
-  s.dependency 'Helium', '~> 4.1', '>= 4.1.7'
-  s.dependency 'StripeApplePay', '~> 25.6'
+  s.dependency 'Helium', '~> 4.5', '>= 4.5.3'
+  s.dependency 'StripeApplePay', '~> 25.6', '>= 25.6.2'
 end
