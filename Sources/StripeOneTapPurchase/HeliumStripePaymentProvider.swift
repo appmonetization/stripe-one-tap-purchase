@@ -35,6 +35,36 @@ public struct StripeClientSecretResult: Sendable {
     }
 }
 
+/// Free or paid trial terms forwarded to an overridden `finalizePurchase` so the
+/// Stripe subscription it creates matches what the paywall displayed.
+public struct StripeTrialInfo: Sendable {
+    public let paid: Bool
+    public let days: Int
+    /// Intro charge in the smallest currency unit (e.g. cents); nil when free.
+    public let amount: Int?
+    public let currency: String?
+}
+
+extension StripeTrialInfo {
+    /// Derives trial terms from the on-launch offer for `heliumProductKey` — the same
+    /// `introOffer` the paywall renders. Nil when there is no eligible trial.
+    init?(heliumProductKey: String) {
+        guard let product = HeliumFetchedConfigManager.shared.getStripeProductsPriceMap()?[heliumProductKey],
+              let subscription = product.toLocalizedPrice().subscriptionInfo,
+              subscription.introOfferEligible,
+              let offer = subscription.introOffer else {
+            return nil
+        }
+        let paid = offer.paymentMode != OfferPaymentMode.freeTrial
+        self.init(
+            paid: paid,
+            days: offer.periodValue * offer.periodCount * trialDaysPerUnit(offer.periodUnit),
+            amount: paid ? smallestCurrencyUnit(offer.price, currency: product.currency) : nil,
+            currency: product.currency
+        )
+    }
+}
+
 open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked Sendable {
 
     private let merchantName: String
@@ -214,10 +244,10 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
 
     /// Called after Apple Pay confirms the SetupIntent. Creates the actual
     /// subscription (or one-time charge) using the now-confirmed payment method.
-    /// The default ignores `metadata` (the server stamps it); overrides must copy it
-    /// onto the Stripe subscription they create.
+    /// The default ignores `metadata` and `trial` (the server applies them); overrides must
+    /// copy `metadata` and honor `trial` on the Stripe subscription they create.
     @MainActor
-    open func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String]) async throws -> PaymentSuccessResponse {
+    open func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String], trial: StripeTrialInfo?) async throws -> PaymentSuccessResponse {
         var body = try HeliumStripeAPIClient.shared.baseRequestBody(productId: heliumProductKey)
         body["paymentMethodId"] = paymentMethod.id
 
@@ -244,6 +274,33 @@ private struct SetupIntentResponse: Decodable {
 
 
 // MARK: - Helpers
+
+/// Days per offer period unit. month/year are nominal (30/365) until the offer model carries exact days.
+private func trialDaysPerUnit(_ periodUnit: String) -> Int {
+    switch periodUnit.lowercased() {
+    case "day": return 1
+    case "week": return 7
+    case "month": return 30
+    case "year": return 365
+    default: return 1
+    }
+}
+
+/// Converts a price to the smallest currency unit (e.g. 0.99 USD → 99), using the currency's fraction digits.
+private func smallestCurrencyUnit(_ amount: Decimal, currency: String?) -> Int {
+    var scaled = Decimal()
+    var value = amount
+    NSDecimalMultiplyByPowerOf10(&scaled, &value, Int16(currencyFractionDigits(currency)), .plain)
+    return NSDecimalNumber(decimal: scaled).intValue
+}
+
+private func currencyFractionDigits(_ currency: String?) -> Int {
+    guard let currency else { return 2 }
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = currency
+    return formatter.maximumFractionDigits
+}
 
 /// Returns a valid `NSCalendar.Unit` for `PKRecurringPaymentSummaryItem`.
 /// Apple Pay only supports year, month, day, hour, minute — **not** week.

@@ -23,8 +23,9 @@ public protocol StripeOneTapPaymentProvider: Sendable {
     /// Called after the payment method is confirmed, before reporting purchase status to Helium.
     /// Typically where Stripe subscription is created.
     /// `metadata` is the Helium identity metadata from create-intent; copy it onto any
-    /// subscription you create. Throwing here will report `.failed(error)` instead of `.purchased`.
-    @MainActor func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String]) async throws -> PaymentSuccessResponse
+    /// subscription you create. `trial` carries free/paid trial terms (nil when none) that you
+    /// should honor on that subscription. Throwing here will report `.failed(error)` instead of `.purchased`.
+    @MainActor func finalizePurchase(for heliumProductKey: String, paymentMethod: StripeAPI.PaymentMethod, metadata: [String: String], trial: StripeTrialInfo?) async throws -> PaymentSuccessResponse
 }
 
 // MARK: - Default Implementations
@@ -196,7 +197,8 @@ extension StripeOneTapPurchaseDelegate: ApplePayContextDelegate {
                             guard let paymentMethod else {
                                 throw StripeOneTapError.noPaymentMethod
                             }
-                            let paymentSuccessResponse = try await provider.finalizePurchase(for: productId, paymentMethod: paymentMethod, metadata: metadata)
+                            let trial = StripeTrialInfo(heliumProductKey: productId)
+                            let paymentSuccessResponse = try await provider.finalizePurchase(for: productId, paymentMethod: paymentMethod, metadata: metadata, trial: trial)
                             transactionId = paymentSuccessResponse.transactionId
                             StripeCheckoutManager.shared.handleNewPurchase(productId: productId, priceId: paymentSuccessResponse.priceId, subscriptionExpiresAt: paymentSuccessResponse.expiresAt)
                         }
