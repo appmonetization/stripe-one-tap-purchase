@@ -124,12 +124,7 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
 
         // Compute the date regular billing starts (end of intro offer)
         let regularStartDate: Date? = introOffer.flatMap { offer in
-            let totalOfferDuration = offer.periodValue * offer.periodCount
-            return Calendar.current.date(
-                byAdding: calendarComponent(from: offer.periodUnit),
-                value: totalOfferDuration,
-                to: Date()
-            )
+            Calendar.current.date(byAdding: .day, value: trialDays(offer), to: Date())
         }
 
         if let offer = introOffer {
@@ -171,8 +166,8 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
                     label: formatIntroOfferLabel(offer),
                     amount: NSDecimalNumber(decimal: offer.price)
                 )
-                trialBilling.intervalUnit = calendarUnit(from: offer.periodUnit)
-                trialBilling.intervalCount = calendarIntervalCount(from: offer.periodUnit, value: offer.periodValue)
+                trialBilling.intervalUnit = .day
+                trialBilling.intervalCount = trialDays(offer)
                 recurringRequest.trialBilling = trialBilling
 
                 recurringRequest.billingAgreement = buildBillingAgreement(
@@ -286,6 +281,15 @@ private func trialDaysPerUnit(_ periodUnit: String) -> Int {
     }
 }
 
+/// Total intro/trial length in days. Used for sheet wording so trials read as "30 days" rather than "1 month".
+private func trialDays(_ offer: SubscriptionOffer) -> Int {
+    offer.periodValue * offer.periodCount * trialDaysPerUnit(offer.periodUnit)
+}
+
+private func formatDayDuration(_ days: Int) -> String {
+    days == 1 ? "1 day" : "\(days) days"
+}
+
 /// Converts a price to the smallest currency unit (e.g. 0.99 USD → 99), using the currency's fraction digits.
 private func smallestCurrencyUnit(_ amount: Decimal, currency: String?) -> Int {
     var scaled = Decimal()
@@ -322,33 +326,13 @@ private func calendarIntervalCount(from periodUnit: String, value: Int) -> Int {
     periodUnit.lowercased() == "week" ? value * 7 : value
 }
 
-private func calendarComponent(from periodUnit: String) -> Calendar.Component {
-    switch periodUnit.lowercased() {
-    case "day": return .day
-    case "week": return .weekOfMonth
-    case "month": return .month
-    case "year": return .year
-    default: return .month
-    }
-}
 
 private func formatIntroOfferLabel(_ offer: SubscriptionOffer) -> String {
-    let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+    let days = trialDays(offer)
     if offer.paymentMode == OfferPaymentMode.freeTrial {
-        return "\(duration) Free Trial"
+        return "\(days)-day Free Trial"
     }
-    return "\(duration) at \(offer.displayPrice)"
-}
-
-/// Hyphenated form for use as an adjective (e.g., "3-month Free Trial")
-private func formatPeriodDescription(unit: String, value: Int) -> String {
-    switch unit.lowercased() {
-    case "day": return value == 1 ? "1-day" : "\(value)-day"
-    case "week": return value == 1 ? "1-week" : "\(value)-week"
-    case "month": return value == 1 ? "1-month" : "\(value)-month"
-    case "year": return value == 1 ? "1-year" : "\(value)-year"
-    default: return "\(value) \(unit)"
-    }
+    return "\(offer.displayPrice) for \(formatDayDuration(days))"
 }
 
 /// Formats a date as "Feb 28" style for display in payment labels
@@ -361,10 +345,10 @@ private func formatShortDate(_ date: Date) -> String {
 private func buildBillingAgreement(product: ServerProductPrice, offer: SubscriptionOffer) -> String {
     let regularPrice = product.formattedPrice ?? ""
     let period = product.subscription?.periodUnit ?? "month"
-    let duration = formatPeriodDescription(unit: offer.periodUnit, value: offer.periodValue * offer.periodCount)
+    let days = trialDays(offer)
 
     if offer.paymentMode == OfferPaymentMode.freeTrial {
-        return "You will be charged \(regularPrice)/\(period) after your \(duration) free trial ends. Cancel anytime."
+        return "You will be charged \(regularPrice)/\(period) after your \(days)-day free trial ends. Cancel anytime."
     }
-    return "You will be charged \(offer.displayPrice)/\(offer.periodUnit) during the introductory period, then \(regularPrice)/\(period). Cancel anytime."
+    return "You will be charged \(offer.displayPrice) for the first \(formatDayDuration(days)), then \(regularPrice)/\(period). Cancel anytime."
 }
