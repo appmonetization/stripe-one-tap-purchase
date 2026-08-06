@@ -46,6 +46,23 @@ public struct StripeTrialInfo: Sendable {
 }
 
 extension StripeTrialInfo {
+    /// JSON-safe representation for request bodies. Optional fields are omitted when nil.
+    public func toDictionary() -> [String: Any] {
+        var dict: [String: Any] = [
+            "paid": paid,
+            "days": days
+        ]
+        if let amount {
+            dict["amount"] = amount
+        }
+        if let currency {
+            dict["currency"] = currency
+        }
+        return dict
+    }
+}
+
+extension StripeTrialInfo {
     /// Derives trial terms from the on-launch offer for `heliumProductKey` — the same
     /// `introOffer` the paywall renders. Nil when there is no eligible trial.
     init?(heliumProductKey: String) {
@@ -162,12 +179,15 @@ open class HeliumStripePaymentProvider: StripeOneTapPaymentProvider, @unchecked 
             )
 
             if let offer = introOffer {
+                // Apple renders trialBilling as a separate row with its own cadence label
+                // ("per week"/"per month") — we accept that wording in exchange for clearly
+                // showing the offer and the recurring subscription as distinct rows.
                 let trialBilling = PKRecurringPaymentSummaryItem(
                     label: formatIntroOfferLabel(offer),
                     amount: NSDecimalNumber(decimal: offer.price)
                 )
-                trialBilling.intervalUnit = .day
-                trialBilling.intervalCount = trialDays(offer)
+                trialBilling.intervalUnit = calendarUnit(from: offer.periodUnit)
+                trialBilling.intervalCount = calendarIntervalCount(from: offer.periodUnit, value: offer.periodValue)
                 recurringRequest.trialBilling = trialBilling
 
                 recurringRequest.billingAgreement = buildBillingAgreement(
